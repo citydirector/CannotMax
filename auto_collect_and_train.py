@@ -258,23 +258,36 @@ class AutoCollectAndTrain:
             self._update_progress("🔄 启动训练进程...")
             
             # 使用subprocess运行train_onnx.py
+            # 注意：不使用text模式，避免编码问题
             proc = subprocess.Popen(
                 ["uv", "run", "python", "train_onnx.py"],
                 cwd=str(Path(__file__).parent),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
+                # 移除 encoding 参数，使用 bytes 模式
             )
             
-            # 实时输出训练日志
-            for line in proc.stdout:
-                line = line.rstrip()
-                if line:
-                    logger.debug(f"训练日志: {line}")
-                    # 每10行更新一次进度，避免刷屏
-                    if "Epoch" in line or "Loss" in line:
-                        self._update_progress(f"训练中: {line[:60]}")
+            # 实时输出训练日志（处理编码问题）
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                
+                try:
+                    # 尝试UTF-8解码，失败则使用GBK
+                    try:
+                        decoded_line = line.decode('utf-8').rstrip()
+                    except UnicodeDecodeError:
+                        decoded_line = line.decode('gbk', errors='ignore').rstrip()
+                    
+                    if decoded_line:
+                        logger.debug(f"训练日志: {decoded_line}")
+                        # 每10行更新一次进度，避免刷屏
+                        if "Epoch" in decoded_line or "Loss" in decoded_line or "训练" in decoded_line:
+                            self._update_progress(f"训练中: {decoded_line[:60]}")
+                except Exception as e:
+                    logger.debug(f"日志解码错误: {e}")
+                    continue
             
             proc.wait()
             return_code = proc.returncode

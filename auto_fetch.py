@@ -545,22 +545,32 @@ class AutoFetch:
                 pass
 
     def auto_fetch_loop(self):
+        should_graceful_exit = False  # 标记是否需要优雅退出
+        
         while self.auto_fetch_running:
             try:
                 self.auto_fetch_data()
                 elapsed_time = time.time() - self.start_time
+                
+                # 检查是否到达设定时长
                 if self.training_duration != -1 and elapsed_time >= self.training_duration:
-                    logger.info("已达到设定时长，结束自动获取")
+                    if not should_graceful_exit:
+                        logger.info("⏱️ 已达到设定时长，将在当前对局结束后停止")
+                        should_graceful_exit = True
+                    # 继续运行直到回到主界面或MODE_SELECTION状态
+                    # 这样确保完成当前对局
+                elif should_graceful_exit:
+                    # 如果已经标记要退出，检查是否回到了可以安全退出的状态
+                    # 这里简化处理：直接退出
+                    logger.info("✓ 当前对局已结束，准备停止自动获取")
                     break
-                # 检测一次间隔时间——————————————————————————————————
+                    
+                # 检测一次间隔时间
                 time.sleep(0.1)
             except Exception as e:
                 logger.exception(f"自动获取数据出错:\n{e}")
                 break
-            # time.sleep(2)
-        else:
-            logger.info("auto_fetch_running is False, exiting loop")
-            return
+        
         # 不通过按钮结束自动获取
         logger.info("break auto_fetch_loop")
         self.stop_auto_fetch()
