@@ -149,6 +149,68 @@ class CannotModel:
             verbose=True  # 开启详细输出便于调试
         )
 
+    def export_onnx_v2(self, outputpath, monster_count=MONSTER_COUNT, field_feature_count=FIELD_FEATURE_COUNT):
+        """
+        导出 ONNX 模型，只暴露 2 个输入 (left_counts, right_counts)，
+        与 predict_onnx.py 的 CannotModel.get_prediction() 兼容。
+        内部自动处理符号/绝对值/地形特征拆分。
+        """
+        import torch.nn as nn
+
+        class ONNXWrapper(nn.Module):
+            def __init__(self, model, fc):
+                super().__init__()
+                self.model = model
+                self.field_count = fc
+
+            def forward(self, left_counts, right_counts):
+                total = left_counts.shape[1]
+                mc = total - self.field_count
+                left_monsters = left_counts[:, :mc]
+                left_terrain = left_counts[:, mc:]
+                right_monsters = right_counts[:, :mc]
+                right_terrain = right_counts[:, mc:]
+
+                # 怪物: sign + abs
+                ls = torch.sign(left_monsters).to(left_monsters.dtype)
+                lc = torch.abs(left_monsters)
+                rs = torch.sign(right_monsters).to(right_monsters.dtype)
+                rc = torch.abs(right_monsters)
+
+                # 地形: sign 恒为 1, 值不变
+                lts = torch.ones_like(left_terrain, dtype=left_terrain.dtype)
+                rts = torch.ones_like(right_terrain, dtype=right_terrain.dtype)
+
+                left_signs = torch.cat([ls, lts], dim=1)
+                left_counts_final = torch.cat([lc, left_terrain], dim=1)
+                right_signs = torch.cat([rs, rts], dim=1)
+                right_counts_final = torch.cat([rc, right_terrain], dim=1)
+
+                return self.model(left_signs, left_counts_final, right_signs, right_counts_final)
+
+        self.model = self.model.cpu()
+        self.model.eval()
+        wrapper = ONNXWrapper(self.model, field_feature_count)
+        total_features = monster_count + field_feature_count
+
+        dummy_left = torch.randint(0, 10, (1, total_features), dtype=torch.int64)
+        dummy_right = torch.randint(0, 10, (1, total_features), dtype=torch.int64)
+
+        torch.onnx.export(
+            wrapper,
+            (dummy_left, dummy_right),
+            outputpath,
+            input_names=["left_counts", "right_counts"],
+            output_names=["output"],
+            dynamic_axes={
+                "left_counts": {0: "batch_size"},
+                "right_counts": {0: "batch_size"},
+                "output": {0: "batch_size"},
+            },
+            opset_version=20,
+        )
+        logger.info(f"ONNX 模型已导出(2输入兼容版): {outputpath}")
+
     def get_prediction(self, left_counts: np.typing.ArrayLike, right_counts: np.typing.ArrayLike):
         if self.model is None:
             raise RuntimeError("模型未正确初始化")

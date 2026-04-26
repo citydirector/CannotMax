@@ -173,7 +173,7 @@ class InputPanelUI(QFrame):
         terrain_header_layout.setContentsMargins(0, 0, 0, 0)
 
         terrain_label = QLabel("地形选择（多选）:")
-        terrain_label.setStyleSheet("color: #414141; font-weight: bold;")
+        terrain_label.setStyleSheet("color: #CCCCCC; font-weight: bold;")
         terrain_header_layout.addWidget(terrain_label)
 
         # 只保留清空按钮

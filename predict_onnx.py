@@ -44,20 +44,40 @@ class CannotModel:
         if self.session is None:
             raise RuntimeError("模型未正确初始化")
         
-        def validate_input(arr):
+        # 获取模型期望的输入维度
+        model_expected_dim = self.session.get_inputs()[0].shape[1]
+        current_dim = len(left_counts)
+        
+        # 临时修复：如果当前配置与模型期望不匹配，进行填充
+        needs_padding = False
+        if current_dim != model_expected_dim:
+            needs_padding = True
+            logger.warning(
+                f"⚠️ 维度不匹配：当前配置{current_dim}种怪物，但模型期望{model_expected_dim}维\n"
+                f"   这是临时方案，预测结果可能不准确。\n"
+                f"   建议：收集足够数据后重新训练模型。"
+            )
+        
+        def validate_input(arr, should_pad=False):
             """验证并转换输入数据"""
             # 转换为 int64 类型
             arr = arr.astype(np.int64)
-    
+            
+            # 如果需要，填充到模型期望的维度
+            if should_pad and len(arr) < model_expected_dim:
+                padded = np.zeros(model_expected_dim, dtype=np.int64)
+                padded[:len(arr)] = arr
+                arr = padded
+            
             # 添加批次维度（如果输入是单样本）
             if arr.ndim == 1:
-                arr = arr[np.newaxis, :]  # shape: (1, 56)
+                arr = arr[np.newaxis, :]
             return arr
         
-        # 添加批次维度
+        # 添加批次维度（如果需要则填充）
         inputs = {
-            "left_counts": validate_input(left_counts).astype(np.int64),
-            "right_counts": validate_input(right_counts).astype(np.int64)
+            "left_counts": validate_input(left_counts, should_pad=needs_padding).astype(np.int64),
+            "right_counts": validate_input(right_counts, should_pad=needs_padding).astype(np.int64)
         }
         
         # 执行推理
@@ -66,8 +86,8 @@ class CannotModel:
                 output_names=["output"],
                 input_feed=inputs
             )
-            print(output)
-            prediction = output[0]
+            logger.debug(f"原始输出: {output}")
+            prediction = output[0].item() if hasattr(output[0], 'item') else float(output[0][0])
         except Exception as e:
             raise RuntimeError(f"推理失败: {str(e)}")
         

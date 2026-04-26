@@ -65,6 +65,7 @@ class ADBConnectorThread(QThread):
         self.app.adb_connector.connect()
         self.connect_finished.emit()
 
+
 class ArknightsApp(QMainWindow):
     # 添加自定义信号
     update_button_signal = pyqtSignal(str)  # 用于更新按钮文本
@@ -268,8 +269,28 @@ class ArknightsApp(QMainWindow):
         # 左侧垂直布局：控制面板 + 连接设置
         left_column = QVBoxLayout()
 
+        # 深色主题样式(适配暗色模式)
+        dark_group_box_style = """
+            QGroupBox {
+                background-color: rgba(0, 0, 0, 120);
+                border-radius: 8px;
+                border: 1px solid #555555;
+                margin-top: 10px;
+                padding: 10px 5px;
+                color: #E0E0E0;
+                font-weight: bold;
+            }
+            QGroupBox::title {
+                color: #E0E0E0;
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 3px;
+            }
+        """
+
         # --- 控制面板 ---
         control_group = QGroupBox("控制面板")
+        control_group.setStyleSheet(dark_group_box_style)
         control_layout = QVBoxLayout(control_group)
 
         # 第一行按钮
@@ -311,6 +332,76 @@ class ArknightsApp(QMainWindow):
         self.stats_label.setFont(QFont("Microsoft YaHei", 10))
         row2_layout.addWidget(self.stats_label)
 
+        # 第三行 - 训练 ONNX 模型
+        row3 = QWidget()
+        row3_layout = QHBoxLayout(row3)
+        row3_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.train_onnx_button = QPushButton("🧠 训练ONNX模型")
+        self.train_onnx_button.clicked.connect(self.train_onnx_model)
+        self.train_onnx_button.setStyleSheet(self.qt_button_style)
+        row3_layout.addWidget(self.train_onnx_button)
+
+        self.train_status_label = QLabel("")
+        self.train_status_label.setFont(QFont("Microsoft YaHei", 9))
+        self.train_status_label.setStyleSheet("color: #888888;")
+        row3_layout.addWidget(self.train_status_label)
+
+        # 第四行 - 一键数据收集和训练
+        row4 = QWidget()
+        row4_layout = QHBoxLayout(row4)
+        row4_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.auto_collect_train_button = QPushButton("🔄 从0开始收集数据并训练")
+        self.auto_collect_train_button.clicked.connect(self.start_auto_collect_and_train)
+        self.auto_collect_train_button.setStyleSheet(
+            self.qt_button_style + """
+            QPushButton {
+                background-color: #2E7D32;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #388E3C;
+            }
+            QPushButton:disabled {
+                background-color: #555555;
+                color: #888888;
+            }
+            """
+        )
+        self.auto_collect_train_button.setToolTip(
+            "一键完成：忽略旧模型 → 自动游戏收集数据（固定选左）→ 到达时长后停止 → 自动训练新模型"
+        )
+        row4_layout.addWidget(self.auto_collect_train_button)
+
+        # 添加停止按钮
+        self.stop_auto_collect_button = QPushButton("⏹️ 停止")
+        self.stop_auto_collect_button.clicked.connect(self.stop_auto_collect_and_train)
+        self.stop_auto_collect_button.setEnabled(False)
+        self.stop_auto_collect_button.setStyleSheet(
+            self.qt_button_style + """
+            QPushButton {
+                background-color: #C62828;
+                color: white;
+            }
+            QPushButton:hover {
+                background-color: #D32F2F;
+            }
+            QPushButton:disabled {
+                background-color: #555555;
+                color: #888888;
+            }
+            """
+        )
+        self.stop_auto_collect_button.setToolTip("停止当前的自动数据收集流程")
+        self.stop_auto_collect_button.setFixedWidth(80)
+        row4_layout.addWidget(self.stop_auto_collect_button)
+
+        self.auto_collect_status_label = QLabel("")
+        self.auto_collect_status_label.setFont(QFont("Microsoft YaHei", 9))
+        self.auto_collect_status_label.setStyleSheet("color: #4CAF50;")
+        row4_layout.addWidget(self.auto_collect_status_label)
+
         # GitHub链接
         github_label = QLabel(
             '<a href="https://github.com/Ancientea/CannotMax" style="color: #2196F3; text-decoration: none;">https://github.com/Ancientea/CannotMax</a>'
@@ -324,10 +415,13 @@ class ArknightsApp(QMainWindow):
         # 添加到控制布局
         control_layout.addWidget(row1)
         control_layout.addWidget(row2)
+        control_layout.addWidget(row3)
+        control_layout.addWidget(row4)
         control_layout.addWidget(github_label)
 
         # --- 连接设置 ---
         connection_group = QGroupBox("连接设置")
+        connection_group.setStyleSheet(dark_group_box_style)
         connection_layout = QVBoxLayout(connection_group)
 
         # 模式选择行
@@ -577,6 +671,8 @@ class ArknightsApp(QMainWindow):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        # 深色底色（适配暗色模式，防止白色文字在浅色背景上不可见）
+        painter.fillRect(self.rect(), QColor("#1e1e1e"))
         # 缩放图片以适应窗口（保持宽高比）
         scaled_pixmap = self.background.scaled(
             self.size(),
@@ -589,6 +685,8 @@ class ArknightsApp(QMainWindow):
             (self.height() - scaled_pixmap.height()) // 2,
             scaled_pixmap,
         )
+        # 半透明遮罩：降低背景亮度，保证所有文字可读
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 100))
 
     def update_input_display(self):
         left_monsters_dict, right_monsters_dict = self.input_panel.get_monster_counts()
@@ -680,7 +778,7 @@ class ArknightsApp(QMainWindow):
 
     def reset_entries(self):
         self.result_label.setText("预测结果将显示在这里")
-        self.result_label.setStyleSheet("color: black;")
+        self.result_label.setStyleSheet("color: #E0E0E0;")
         self.update_input_display()
 
     def get_prediction(self):
@@ -741,7 +839,7 @@ class ArknightsApp(QMainWindow):
             result_text = (
                 f"这一把{winner}\n" f"左 {left_win_prob:.2%} | 右 {right_win_prob:.2%}\n" f"难道说？难道说？难道说？\n"
             )
-            self.result_label.setStyleSheet("color: black; font: bold,24px;")
+            self.result_label.setStyleSheet("color: #E0E0E0; font: bold,24px;")
 
         # 添加特殊干员提示
         special_messages = self.special_monster_handler.check_special_monsters(
@@ -852,6 +950,191 @@ class ArknightsApp(QMainWindow):
             self.auto_fetch.start_auto_fetch()
         else:
             self.auto_fetch.stop_auto_fetch()
+
+    def train_onnx_model(self):
+        """运行训练+转ONNX全流程（子进程，不阻塞UI）"""
+        # 检查：采集运行时不能训练
+        if hasattr(self, "auto_fetch") and self.auto_fetch.auto_fetch_running:
+            QMessageBox.warning(self, "冲突", "请先停止「自动获取数据」再进行训练")
+            return
+        import subprocess, threading
+
+        def _train_thread():
+            try:
+                self.train_onnx_button.setText("⏳ 训练中...")
+                self.train_onnx_button.setEnabled(False)
+                self.train_status_label.setText("训练中，请稍候...")
+
+                # 使用 uv run 执行 train_onnx.py
+                proc = subprocess.Popen(
+                    ["uv", "run", "python", "train_onnx.py"],
+                    cwd="D:\\CannotMax",
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                )
+                # 实时输出到日志
+                for line in proc.stdout:
+                    line = line.rstrip()
+                    if line:
+                        logger.info(line)
+                        # 用 Qt 信号更新最后一行状态
+                        self.train_status_label.setText(line[-80:])
+
+                proc.wait()
+                return_code = proc.returncode
+
+                if return_code == 0:
+                    # 训练成功，重新加载模型
+                    from importlib import reload
+                    import predict_onnx
+                    reload(predict_onnx)
+                    self.cannot_model = predict_onnx.CannotModel()
+                    model_name = Path(self.cannot_model.model_path).name if self.cannot_model.model_path else "未加载"
+                    self.setWindowTitle(
+                        self.windowTitle().rsplit(" - model:", 1)[0] + f" - model: {model_name}"
+                    )
+                    if self.cannot_model.is_model_loaded:
+                        self.recognize_button.setEnabled(True)
+                        self.recognize_button.setToolTip("")
+                        self.input_panel.predict_button.setEnabled(True)
+                        self.input_panel.predict_button.setToolTip("")
+                        self.train_status_label.setText("✅ 训练完成！ONNX 模型已加载")
+                    else:
+                        self.train_status_label.setText("⚠️ 模型生成但加载失败，请检查")
+                else:
+                    self.train_status_label.setText(f"❌ 训练失败 (code={return_code})")
+
+            except Exception as e:
+                logger.error(f"训练出错: {e}")
+                self.train_status_label.setText(f"❌ 训练异常: {str(e)[:60]}")
+            finally:
+                self.train_onnx_button.setText("🧠 训练ONNX模型")
+                self.train_onnx_button.setEnabled(True)
+
+        threading.Thread(target=_train_thread, daemon=True).start()
+
+    def start_auto_collect_and_train(self):
+        """启动自动数据收集和训练流程"""
+        # 检查是否已经在运行
+        if hasattr(self, 'auto_collect_train') and self.auto_collect_train.is_running:
+            reply = QMessageBox.question(
+                self,
+                "确认停止",
+                "自动数据收集已在运行中，是否要停止？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.auto_collect_train.stop()
+                self.auto_collect_train_button.setText("🔄 从0开始收集数据并训练")
+                self.auto_collect_train_button.setEnabled(True)
+                self.auto_collect_status_label.setText("已停止")
+            return
+        
+        # 检查是否有auto_fetch在运行
+        if hasattr(self, "auto_fetch") and self.auto_fetch.auto_fetch_running:
+            QMessageBox.warning(self, "冲突", "请先停止「自动获取数据」再进行此操作")
+            return
+        
+        # 获取训练时长
+        try:
+            training_hours = float(self.duration_entry.text())
+            if training_hours <= 0:
+                raise ValueError("训练时长必须大于0")
+        except ValueError as e:
+            QMessageBox.warning(self, "输入错误", f"训练时长格式错误: {e}")
+            return
+        
+        # 确认对话框
+        reply = QMessageBox.question(
+            self,
+            "确认开始",
+            f"即将开始自动数据收集和训练流程：\n\n"
+            f"1. 忽略当前错误的ONNX模型\n"
+            f"2. 自动游戏收集数据（固定选左）\n"
+            f"3. 运行 {training_hours:.1f} 小时后停止\n"
+            f"4. 自动训练新模型\n\n"
+            f"是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        # 禁用启动按钮，启用停止按钮
+        self.auto_collect_train_button.setEnabled(False)
+        self.auto_collect_train_button.setText("⏳ 收集中...")
+        self.stop_auto_collect_button.setEnabled(True)
+        self.auto_collect_status_label.setText("准备启动...")
+        
+        # 导入自动收集模块
+        from auto_collect_and_train import AutoCollectAndTrain
+        
+        # 创建实例
+        self.auto_collect_train = AutoCollectAndTrain(
+            adb_connector=self.adb_connector,
+            game_mode=self.game_mode,
+            training_duration_hours=training_hours,
+            progress_callback=self.update_auto_collect_status,
+            completion_callback=self.on_auto_collect_complete,
+        )
+        
+        # 启动流程
+        self.auto_collect_train.start()
+    
+    def stop_auto_collect_and_train(self):
+        """停止自动数据收集流程"""
+        if hasattr(self, 'auto_collect_train') and self.auto_collect_train.is_running:
+            reply = QMessageBox.question(
+                self,
+                "确认停止",
+                "确定要停止当前的自动数据收集流程吗？\n\n已收集的数据会被保留，但训练不会自动开始。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.auto_collect_train.stop()
+                self.stop_auto_collect_button.setEnabled(False)
+                self.auto_collect_train_button.setText("🔄 从0开始收集数据并训练")
+                self.auto_collect_status_label.setText("⏹️ 已手动停止")
+        else:
+            QMessageBox.information(self, "提示", "当前没有运行中的自动收集流程")
+    
+    def update_auto_collect_status(self, message: str):
+        """更新自动收集状态显示"""
+        self.auto_collect_status_label.setText(message[-80:])  # 显示最后80个字符
+    
+    def on_auto_collect_complete(self, success: bool, message: str):
+        """自动收集流程完成回调"""
+        # 恢复按钮状态
+        self.auto_collect_train_button.setEnabled(True)
+        self.auto_collect_train_button.setText("🔄 从0开始收集数据并训练")
+        self.stop_auto_collect_button.setEnabled(False)
+        
+        if success:
+            self.auto_collect_status_label.setText("✅ 完成！")
+            QMessageBox.information(self, "成功", message)
+            
+            # 重新加载模型
+            try:
+                from importlib import reload
+                import predict_onnx
+                reload(predict_onnx)
+                self.cannot_model = predict_onnx.CannotModel()
+                
+                if self.cannot_model.is_model_loaded:
+                    model_name = Path(self.cannot_model.model_path).name
+                    self.setWindowTitle(
+                        self.windowTitle().rsplit(" - model:", 1)[0] + f" - model: {model_name}"
+                    )
+                    self.recognize_button.setEnabled(True)
+                    self.input_panel.predict_button.setEnabled(True)
+                    logger.info("新模型已成功加载")
+            except Exception as e:
+                logger.error(f"加载新模型失败: {e}")
+        else:
+            self.auto_collect_status_label.setText("❌ 失败")
+            QMessageBox.critical(self, "失败", message)
 
     def update_statistics(self):
         elapsed_time = time.time() - self.auto_fetch.start_time if self.auto_fetch.start_time else 0
@@ -1020,6 +1303,11 @@ class ArknightsApp(QMainWindow):
         """窗口关闭时的处理"""
         if hasattr(self, "auto_fetch") and self.auto_fetch.auto_fetch_running:
             self.auto_fetch.stop_auto_fetch()
+        
+        if hasattr(self, "auto_collect_train") and self.auto_collect_train.is_running:
+            logger.info("正在停止自动数据收集流程...")
+            self.auto_collect_train.stop()
+        
         event.accept()
 
 
