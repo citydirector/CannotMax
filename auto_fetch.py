@@ -191,7 +191,7 @@ class AutoFetch:
             data_row.extend(field_data_values)  # 78R-83R (场地特征R，复制)
         else:
             # 仅收集怪物数据的格式
-            logger.info("仅收集怪物数据，跳过场地特征")
+            logger.debug("仅收集怪物数据，跳过场地特征")
             data_row.extend(left_monster_data.tolist())  # 左侧怪物数据
             data_row.extend(right_monster_data.tolist())  # 右侧怪物数据
         
@@ -213,6 +213,27 @@ class AutoFetch:
         with open(self.data_folder / "arknights.csv", "a", newline="") as file:
             writer = csv.writer(file)
             writer.writerow(data_row)
+        
+        # === 添加详细的回合日志 ===
+        # 构建左右侧怪物描述
+        left_monsters_desc = []
+        right_monsters_desc = []
+        for res in recoginze_results:
+            if "error" not in res and res["matched_id"] != 0:
+                monster_name = f"ID{res['matched_id']}"
+                count = res["number"]
+                if res["region_id"] < 3:
+                    left_monsters_desc.append(f"{monster_name}x{count}")
+                else:
+                    right_monsters_desc.append(f"{monster_name}x{count}")
+        
+        left_str = ", ".join(left_monsters_desc) if left_monsters_desc else "无"
+        right_str = ", ".join(right_monsters_desc) if right_monsters_desc else "无"
+        
+        logger.info(
+            f"📊 回合数据已写入 | 结果: {battle_result} | "
+            f"左: [{left_str}] | 右: [{right_str}]"
+        )
         logger.info(f"写入csv完成")
 
     def build_terrain_features(self, left_counts, right_counts):
@@ -374,7 +395,11 @@ class AutoFetch:
                 self.current_prediction = self.cannot_model.get_prediction(left_counts, right_counts)
             self.update_prediction_callback(self.current_prediction)
         else:
-            logger.warning("模型未加载，无法进行预测")
+            logger.warning("⚠️ 模型未加载，跳过预测（current_prediction保持默认值0.5）")
+            logger.warning("   如果是'从0开始收集数据'模式，这是正常的")
+            logger.warning("   如果是'自动获取数据'且启用投资，预测将不准确！")
+            self.current_prediction = 0.5  # 确保有默认值
+            self.update_prediction_callback(self.current_prediction)
 
         # 人工审核保存测试用截图
         if intelligent_workers_debug:  # 如果处于debug模式且处于自动模式

@@ -103,32 +103,35 @@ class AutoCollectAndTrain:
             
             # 步骤3: 启动数据收集
             self._update_progress("🎮 启动数据收集（固定选左）...")
+            self._update_progress("ℹ️ 提示: 此模式不使用模型预测，仅收集原始数据")
             
             # 导入auto_fetch模块
             import auto_fetch
             
             # 创建临时的回调函数
             def dummy_update_prediction(pred):
-                pass
+                pass  # 不使用预测结果
             
             def dummy_update_monster(monsters):
-                pass
+                pass  # 不更新怪物显示
             
             def dummy_updater():
-                pass
+                pass  # 不更新统计信息
             
             def on_fetch_start():
                 self._update_progress("✓ 数据收集已开始")
                 self._update_progress(f"📊 游戏模式: {self.game_mode}")
+                self._update_progress("🔒 策略: 固定观望（不投资），确保数据一致性")
             
             def on_fetch_stop():
                 self._update_progress("✓ 数据收集已停止")
             
             # 创建AutoFetch实例（固定不投资，确保每次都选左）
+            # 注意：即使模型不存在或加载失败，也不影响数据收集
             self.auto_fetch_instance = auto_fetch.AutoFetch(
                 adb_connector=self.adb_connector,
                 game_mode=self.game_mode,
-                is_invest=False,  # 固定不投资，这样会固定选左
+                is_invest=False,  # 固定不投资，这样会固定选左/观望
                 update_prediction_callback=dummy_update_prediction,
                 update_monster_callback=dummy_update_monster,
                 updater=dummy_updater,
@@ -136,6 +139,14 @@ class AutoCollectAndTrain:
                 stop_callback=on_fetch_stop,
                 training_duration=self.training_duration_seconds,
             )
+            
+            # 检查模型状态并给出提示
+            if not self.auto_fetch_instance.cannot_model.is_model_loaded:
+                self._update_progress("ℹ️ 模型未加载（已备份或不存在），这是正常的")
+                self._update_progress("   数据收集不依赖模型，可以正常进行")
+            else:
+                self._update_progress("⚠️ 警告: 检测到模型已加载")
+                self._update_progress("   但本模式不使用预测，请放心")
             
             # 启动数据收集
             self.auto_fetch_instance.start_auto_fetch()
