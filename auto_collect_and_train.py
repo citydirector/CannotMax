@@ -121,12 +121,13 @@ class AutoCollectAndTrain:
             def on_fetch_start():
                 self._update_progress("✓ 数据收集已开始")
                 self._update_progress(f"📊 游戏模式: {self.game_mode}")
-                self._update_progress("🔒 策略: 固定观望（不投资），确保数据一致性")
+                self._update_progress("🔒 策略: 固定观望（不投资），确保数据纯净性")
+                self._update_progress("ℹ️ 注意: 此模式忽略GUI的投资复选框设置")
             
             def on_fetch_stop():
                 self._update_progress("✓ 数据收集已停止")
             
-            # 创建AutoFetch实例（固定不投资，确保每次都选左）
+            # 创建AutoFetch实例（强制不投资，固定观望）
             # 注意：即使模型不存在或加载失败，也不影响数据收集
             self.auto_fetch_instance = auto_fetch.AutoFetch(
                 adb_connector=self.adb_connector,
