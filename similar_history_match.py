@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from sklearn.metrics.pairwise import cosine_similarity
 from config import MONSTER_COUNT
 from config import FIELD_FEATURE_COUNT
 
@@ -17,6 +16,15 @@ def find_history_csv(session_name=""):
         return str(root_path)
     return "arknights.csv"
 
+
+def cosine_similarity_manual(a, b):
+    """手动实现余弦相似度，替代 sklearn 以减小打包体积"""
+    norm_a = np.linalg.norm(a, axis=1, keepdims=True)
+    norm_b = np.linalg.norm(b, axis=1, keepdims=True)
+    norm_a[norm_a == 0] = 1e-10
+    norm_b[norm_b == 0] = 1e-10
+    dot = np.dot(a, b.T)
+    return dot / (norm_a * norm_b.T)
 
 class HistoryMatch:
     """错题本数据集的读取和处理类"""
@@ -110,7 +118,7 @@ class HistoryMatch:
 
         # 构造当前对局特征并计算与所有历史的余弦相似度
         feat_cur = np.hstack([cur_left + cur_right, np.abs(cur_left - cur_right)]).reshape(1, -1)
-        sims = cosine_similarity(feat_cur, self.feat_past)[0]
+        sims = cosine_similarity_manual(feat_cur, self.feat_past)[0]
 
         # 历史对局的存在布尔矩阵
         hist_pres_L = self.past_left > 0  # shape (N_history, MONSTER_COUNT)

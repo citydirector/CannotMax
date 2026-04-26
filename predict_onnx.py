@@ -1,8 +1,9 @@
+from pathlib import Path
+
 import onnxruntime as ort
 import os
 import numpy as np
 import logging
-from pathlib import Path
 
 from config import MONSTER_COUNT
 from config import FIELD_FEATURE_COUNT
@@ -23,16 +24,33 @@ def resolve_model_path(session_name=""):
 
 
 class CannotModel:
-    def __init__(self, model_path="models/best_model_full.onnx"):
-        self.session = None  # ONNX Runtime 会话
-        self.model_path = model_path
+    def __init__(self, model_path="models"):
+        self.session = None
+        self.model_path = self._resolve_model_path(model_path)
         self.is_model_loaded = False
         try:
-            self.load_model()  # 初始化时加载模型
+            self.load_model()
             self.is_model_loaded = True
         except Exception as e:
             logger.error(f"模型加载失败: {e}")
             self.session = None
+
+    def _resolve_model_path(self, path):
+        if Path(path).is_dir():
+            logger.info(f"Searching for the latest model in directory: {path}")
+            model_dir = Path(path)
+            default_path = model_dir / "best_model_full.onnx"
+            if default_path.exists():
+                logger.info(f"Found default model: {default_path}")
+                return str(default_path)
+            logger.error(f"No valid ONNX model files found in {path}")
+            return str(default_path)
+        elif Path(path).is_file():
+            logger.info(f"Using specified model file: {path}")
+            return path
+        else:
+            logger.error(f"Provided model path is invalid: {path}")
+            return ""
 
     def load_model(self):
         """加载 ONNX 模型"""
