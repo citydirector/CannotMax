@@ -11,6 +11,22 @@ from config import FIELD_FEATURE_COUNT
 logger = logging.getLogger(__name__)
 
 
+def get_available_providers(prefer=""):
+    """根据偏好获取可用的执行提供器列表"""
+    available = ort.get_available_providers()
+
+    if prefer == "cuda" and "CUDAExecutionProvider" in available:
+        return ["CUDAExecutionProvider"]
+    if prefer == "dml" and "DmlExecutionProvider" in available:
+        return ["DmlExecutionProvider"]
+
+    providers = []
+    for p in ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"]:
+        if p in available:
+            providers.append(p)
+    return providers
+
+
 def resolve_model_path(session_name=""):
     """根据会话名称解析 ONNX 模型路径，找不到时回退默认"""
     if session_name:
@@ -24,9 +40,10 @@ def resolve_model_path(session_name=""):
 
 
 class CannotModel:
-    def __init__(self, model_path="models"):
+    def __init__(self, model_path="models", prefer=""):
         self.session = None
         self.model_path = self._resolve_model_path(model_path)
+        self.prefer = prefer
         self.is_model_loaded = False
         try:
             self.load_model()
@@ -57,18 +74,19 @@ class CannotModel:
         try:
             if not os.path.exists(self.model_path):
                 raise FileNotFoundError(f"未找到 ONNX 模型文件 {self.model_path}")
-            
-            # 配置会话选项
+
             sess_options = ort.SessionOptions()
             sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            
-            # 创建会话（默认使用 CPU）
+
+            providers = get_available_providers(self.prefer)
+            logger.info(f"ONNX 推理提供器: {providers}")
+
             self.session = ort.InferenceSession(
                 self.model_path,
                 sess_options,
-                providers=['CPUExecutionProvider']
+                providers=providers
             )
-            
+
         except Exception as e:
             raise RuntimeError(f"ONNX 模型加载失败: {str(e)}")
 

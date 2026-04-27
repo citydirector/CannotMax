@@ -121,9 +121,9 @@ class ArknightsApp(QMainWindow):
             logger.info("PyTorch 模型未加载，尝试 ONNX...")
             try:
                 import predict_onnx
-                session = self._load_session_config().get("session_name", "")
+                cached_cfg = self._load_session_config()
+                session = cached_cfg.get("session_name", "")
                 onnx_path = predict_onnx.resolve_model_path(session)
-                # 如果 ONNX 不存在但 .backup 存在，自动恢复备份
                 if not Path(onnx_path).exists():
                     backup_path = Path(onnx_path + ".backup")
                     if backup_path.exists():
@@ -132,7 +132,8 @@ class ArknightsApp(QMainWindow):
                         data_backup = Path(onnx_path + ".data.backup")
                         if data_backup.exists():
                             data_backup.rename(onnx_path + ".data")
-                self.cannot_model = predict_onnx.CannotModel(onnx_path)
+                prefer = cached_cfg.get("device_type", "")
+                self.cannot_model = predict_onnx.CannotModel(onnx_path, prefer=prefer)
                 if self.cannot_model.is_model_loaded:
                     logger.info(f"ONNX 模型加载成功: {onnx_path}")
                 else:
@@ -386,10 +387,11 @@ class ArknightsApp(QMainWindow):
                 self.device_menu.addItem("CUDA", "cuda")
         except ImportError:
             pass
+        self.device_menu.addItem("NPU/GPU (DirectML)", "dml")
         self.device_menu.setToolTip(
-            "选择训练设备。\n自动检测: 优先GPU。\nCPU: 仅使用CPU。\nCUDA: 强制使用NVIDIA GPU。"
+            "选择训练/推理设备。\n自动检测: CUDA > NPU > CPU。\nCUDA: NVIDIA GPU。\nNPU/GPU: 通用硬件加速（Intel/AMD NPU及GPU）\nCPU: 仅使用CPU。"
         )
-        self.device_menu.setFixedWidth(100)
+        self.device_menu.setFixedWidth(120)
 
         if cached["device_type"]:
             idx = self.device_menu.findData(cached["device_type"])
@@ -1138,7 +1140,7 @@ class ArknightsApp(QMainWindow):
                     reload(predict_onnx)
                     session = self.session_name_entry.text().strip()
                     model_path = predict_onnx.resolve_model_path(session)
-                    self.cannot_model = predict_onnx.CannotModel(model_path)
+                    self.cannot_model = predict_onnx.CannotModel(model_path, prefer=self._infer_prefer())
                     model_name = Path(self.cannot_model.model_path).name if self.cannot_model.model_path else "未加载"
                     self.setWindowTitle(
                         self.windowTitle().rsplit(" - model:", 1)[0] + f" - model: {model_name}"
@@ -1248,6 +1250,15 @@ class ArknightsApp(QMainWindow):
     def _on_train_status(self, message: str, is_final: bool):
         """主线程：更新训练状态显示"""
         self.train_status_label.setText(message[-80:])
+
+    def _infer_prefer(self):
+        """返回 ONNX 推理提供器偏好（基于当前设备选择）"""
+        device = self.device_menu.currentData() or ""
+        if device == "dml":
+            return "dml"
+        if device == "cuda":
+            return "cuda"
+        return ""  # 自动优先级
     
     def _emit_auto_collect_complete(self, success: bool, message: str):
         """完成回调（工作线程），通过信号安全转到主线程"""
@@ -1271,7 +1282,7 @@ class ArknightsApp(QMainWindow):
                 reload(predict_onnx)
                 session = self.auto_collect_train.session_name if hasattr(self, 'auto_collect_train') else ""
                 model_path = predict_onnx.resolve_model_path(session)
-                self.cannot_model = predict_onnx.CannotModel(model_path)
+                self.cannot_model = predict_onnx.CannotModel(model_path, prefer=self._infer_prefer())
                 
                 if self.cannot_model.is_model_loaded:
                     model_name = Path(self.cannot_model.model_path).name
