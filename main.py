@@ -296,25 +296,46 @@ class ArknightsApp(QMainWindow):
         control_group = QGroupBox("控制面板")
         control_group.setStyleSheet(dark_group_box_style)
         control_layout = QVBoxLayout(control_group)
+        control_layout.setSpacing(4)
 
-        # 第零行 - 配置参数
+        # 第零行 - 训练时长 + 会话名
         row0 = QWidget()
         row0_layout = QHBoxLayout(row0)
         row0_layout.setContentsMargins(0, 0, 0, 0)
+        row0_layout.setSpacing(8)
 
-        self.duration_label = QLabel("训练时长(小时):")
+        self.duration_label = QLabel("训练时长(h):")
         self.duration_entry = QLineEdit("325")
-        self.duration_entry.setFixedWidth(50)
+        self.duration_entry.setFixedWidth(45)
 
         self.session_name_label = QLabel("会话名:")
         self.session_name_entry = QLineEdit("")
-        self.session_name_entry.setFixedWidth(110)
+        self.session_name_entry.setFixedWidth(130)
         self.session_name_entry.setPlaceholderText("留空=按时间戳")
         self.session_name_entry.setToolTip(
             "同一会话名的数据和模型会累积复用。\n不同会话名完全隔离。\n留空则每次使用不同时间戳目录。"
         )
 
-        # 训练设备选择
+        # 加载缓存的会话名
+        cached = self._load_session_config()
+        self._session_loading = True
+        if cached["session_name"]:
+            self.session_name_entry.setText(cached["session_name"])
+        self._session_loading = False
+        self.session_name_entry.textChanged.connect(self._on_session_name_changed)
+
+        row0_layout.addWidget(self.duration_label)
+        row0_layout.addWidget(self.duration_entry)
+        row0_layout.addWidget(self.session_name_label)
+        row0_layout.addWidget(self.session_name_entry)
+        row0_layout.addStretch()
+
+        # 单独一行 - 训练设备选择
+        row_dev = QWidget()
+        row_dev_layout = QHBoxLayout(row_dev)
+        row_dev_layout.setContentsMargins(0, 0, 0, 0)
+        row_dev_layout.setSpacing(8)
+
         self.device_label = QLabel("训练设备:")
         self.device_menu = QComboBox()
         self.device_menu.addItem("自动检测", "")
@@ -328,76 +349,68 @@ class ArknightsApp(QMainWindow):
         self.device_menu.setToolTip(
             "选择训练设备。\n自动检测: 优先GPU。\nCPU: 仅使用CPU。\nCUDA: 强制使用NVIDIA GPU。"
         )
+        self.device_menu.setFixedWidth(100)
 
-        # 加载缓存的配置（从上次运行恢复）
-        cached = self._load_session_config()
-        self._session_loading = True
-        if cached["session_name"]:
-            self.session_name_entry.setText(cached["session_name"])
         if cached["device_type"]:
             idx = self.device_menu.findData(cached["device_type"])
             if idx >= 0:
                 self.device_menu.setCurrentIndex(idx)
-        self._session_loading = False
-        self.session_name_entry.textChanged.connect(self._on_session_name_changed)
         self.device_menu.currentIndexChanged.connect(self._on_device_changed)
 
-        row0_layout.addWidget(self.duration_label)
-        row0_layout.addWidget(self.duration_entry)
-        row0_layout.addWidget(self.session_name_label)
-        row0_layout.addWidget(self.session_name_entry)
-        row0_layout.addWidget(self.device_label)
-        row0_layout.addWidget(self.device_menu)
-        row0_layout.addStretch()
+        row_dev_layout.addWidget(self.device_label)
+        row_dev_layout.addWidget(self.device_menu)
+        row_dev_layout.addStretch()
 
-        # 第一行按钮 - 游戏操作
+        # 第一行 - 游戏操作 + 统计
         row1 = QWidget()
         row1_layout = QHBoxLayout(row1)
         row1_layout.setContentsMargins(0, 0, 0, 0)
+        row1_layout.setSpacing(8)
 
         self.auto_fetch_button = QPushButton("自动获取数据")
         self.auto_fetch_button.clicked.connect(self.toggle_auto_fetch)
+        self.auto_fetch_button.setStyleSheet(self.qt_button_style)
+        self.auto_fetch_button.setFixedWidth(120)
 
         self.mode_menu = QComboBox()
         self.mode_menu.addItems(["单人", "30人"])
         self.mode_menu.currentTextChanged.connect(self.update_game_mode)
+        self.mode_menu.setFixedWidth(70)
 
         self.invest_checkbox = QCheckBox("投资")
         self.invest_checkbox.stateChanged.connect(self.update_invest_status)
 
+        self.stats_label = QLabel()
+        self.stats_label.setFont(QFont("Microsoft YaHei", 10))
+
         row1_layout.addWidget(self.auto_fetch_button)
         row1_layout.addWidget(self.mode_menu)
         row1_layout.addWidget(self.invest_checkbox)
+        row1_layout.addWidget(self.stats_label)
         row1_layout.addStretch()
 
-        # 第二行 - 统计信息
+        # 第二行 - 训练 ONNX 模型
         row2 = QWidget()
         row2_layout = QHBoxLayout(row2)
         row2_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.stats_label = QLabel()
-        self.stats_label.setFont(QFont("Microsoft YaHei", 10))
-        row2_layout.addWidget(self.stats_label)
-
-        # 第三行 - 训练 ONNX 模型
-        row3 = QWidget()
-        row3_layout = QHBoxLayout(row3)
-        row3_layout.setContentsMargins(0, 0, 0, 0)
+        row2_layout.setSpacing(8)
 
         self.train_onnx_button = QPushButton("🧠 训练ONNX模型")
         self.train_onnx_button.clicked.connect(self.train_onnx_model)
         self.train_onnx_button.setStyleSheet(self.qt_button_style)
-        row3_layout.addWidget(self.train_onnx_button)
+        self.train_onnx_button.setFixedWidth(140)
+        row2_layout.addWidget(self.train_onnx_button)
 
         self.train_status_label = QLabel("")
         self.train_status_label.setFont(QFont("Microsoft YaHei", 9))
         self.train_status_label.setStyleSheet("color: #888888;")
-        row3_layout.addWidget(self.train_status_label)
+        row2_layout.addWidget(self.train_status_label)
 
-        # 第四行 - 一键数据收集和训练
-        row4 = QWidget()
-        row4_layout = QHBoxLayout(row4)
-        row4_layout.setContentsMargins(0, 0, 0, 0)
+        # 第三行 - 一键数据收集和训练
+        row3 = QWidget()
+        row3_layout = QHBoxLayout(row3)
+        row3_layout.setContentsMargins(0, 0, 0, 0)
+        row3_layout.setSpacing(8)
 
         self.auto_collect_train_button = QPushButton("🔄 从0开始收集数据并训练")
         self.auto_collect_train_button.clicked.connect(self.start_auto_collect_and_train)
@@ -419,9 +432,9 @@ class ArknightsApp(QMainWindow):
         self.auto_collect_train_button.setToolTip(
             "一键完成：自动收集数据（追加到当前会话）→ 到达时长后停止 → 基于历史模型微调 → 导出新ONNX"
         )
-        row4_layout.addWidget(self.auto_collect_train_button)
+        self.auto_collect_train_button.setFixedWidth(230)
+        row3_layout.addWidget(self.auto_collect_train_button)
 
-        # 添加停止按钮
         self.stop_auto_collect_button = QPushButton("⏹️ 停止")
         self.stop_auto_collect_button.clicked.connect(self.stop_auto_collect_and_train)
         self.stop_auto_collect_button.setEnabled(False)
@@ -441,13 +454,13 @@ class ArknightsApp(QMainWindow):
             """
         )
         self.stop_auto_collect_button.setToolTip("停止当前的自动数据收集流程")
-        self.stop_auto_collect_button.setFixedWidth(80)
-        row4_layout.addWidget(self.stop_auto_collect_button)
+        self.stop_auto_collect_button.setFixedWidth(70)
+        row3_layout.addWidget(self.stop_auto_collect_button)
 
         self.auto_collect_status_label = QLabel("")
         self.auto_collect_status_label.setFont(QFont("Microsoft YaHei", 9))
         self.auto_collect_status_label.setStyleSheet("color: #4CAF50;")
-        row4_layout.addWidget(self.auto_collect_status_label)
+        row3_layout.addWidget(self.auto_collect_status_label)
 
         # GitHub链接
         github_label = QLabel(
@@ -461,10 +474,10 @@ class ArknightsApp(QMainWindow):
 
         # 添加到控制布局
         control_layout.addWidget(row0)
+        control_layout.addWidget(row_dev)
         control_layout.addWidget(row1)
         control_layout.addWidget(row2)
         control_layout.addWidget(row3)
-        control_layout.addWidget(row4)
         control_layout.addWidget(github_label)
 
         # --- 连接设置 ---
