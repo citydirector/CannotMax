@@ -450,7 +450,7 @@ class AutoFetch:
             self.update_prediction_callback(self.current_prediction)
         else:
             logger.warning("⚠️ 模型未加载，跳过预测（current_prediction保持默认值0.5）")
-            logger.warning("   如果是'从0开始收集数据'模式，这是正常的")
+            logger.warning("   如果是'一键收集并训练'模式，这是正常的")
             logger.warning("   如果是'自动获取数据'且启用投资，预测将不准确！")
             self.current_prediction = 0.5  # 确保有默认值
             self.update_prediction_callback(self.current_prediction)
@@ -564,16 +564,16 @@ class AutoFetch:
                     # 根据预测结果点击投资左/右
                     if self.current_prediction > 0.5:
                         if best_idx == 4:
-                            self.connector.click(relative_points[0])
+                            self.connector.click(relative_points[0])  # 右ALL
                         else:
-                            self.connector.click(relative_points[2])
+                            self.connector.click(relative_points[2])  # 右礼物
                         logger.info("投资右")
                         time.sleep(3)
                     else:
                         if best_idx == 4:
-                            self.connector.click(relative_points[1])
+                            self.connector.click(relative_points[1])  # 左ALL
                         else:
-                            self.connector.click(relative_points[3])
+                            self.connector.click(relative_points[3])  # 左礼物
                         logger.info("投资左")
                         time.sleep(3)
                     if self.game_mode == "30人":

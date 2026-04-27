@@ -254,13 +254,12 @@ class PcConnector:
             
             try:
                 # 尝试初始化 MaaFramework 控制器以实现后台截图与点击
-                repo_root = Path("MaaAutoReverse").resolve()
-                if str(repo_root) not in sys.path:
-                    sys.path.insert(0, str(repo_root))
-                os.environ["MAAFW_BINARY_PATH"] = str(repo_root / "runtime" / "bin")
-                
                 from maa.toolkit import Toolkit
                 from maa.controller import Win32Controller, MaaWin32ScreencapMethodEnum, MaaWin32InputMethodEnum
+
+                import maa
+                maa_bin = Path(maa.__path__[0]) / "bin"
+                os.environ["MAAFW_BINARY_PATH"] = str(maa_bin)
                 Toolkit.init_option(str(Path.cwd()))
                 
                 # 既然纯 SendMessage 被引擎无视，我们退一步使用 SendMessageWithCursorPos

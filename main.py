@@ -109,8 +109,30 @@ class ArknightsApp(QMainWindow):
         self.game_mode = "单人"
         self._session_loading = False
 
-        # 模型
+        # 模型：优先 PyTorch，失败则回退 ONNX
         self.cannot_model = CannotModel()
+        if not self.cannot_model.is_model_loaded:
+            logger.info("PyTorch 模型未加载，尝试 ONNX...")
+            try:
+                import predict_onnx
+                session = self._load_session_config().get("session_name", "")
+                onnx_path = predict_onnx.resolve_model_path(session)
+                # 如果 ONNX 不存在但 .backup 存在，自动恢复备份
+                if not Path(onnx_path).exists():
+                    backup_path = Path(onnx_path + ".backup")
+                    if backup_path.exists():
+                        logger.info(f"检测到备份模型，正在恢复: {backup_path}")
+                        backup_path.rename(onnx_path)
+                        data_backup = Path(onnx_path + ".data.backup")
+                        if data_backup.exists():
+                            data_backup.rename(onnx_path + ".data")
+                self.cannot_model = predict_onnx.CannotModel(onnx_path)
+                if self.cannot_model.is_model_loaded:
+                    logger.info(f"ONNX 模型加载成功: {onnx_path}")
+                else:
+                    logger.warning("ONNX 模型也未加载")
+            except Exception as e:
+                logger.warning(f"ONNX 回退失败: {e}")
 
         # 怪物识别模块
         self.recognizer = recognize.RecognizeMonster(method="ADB")
@@ -414,7 +436,7 @@ class ArknightsApp(QMainWindow):
         row3_layout.setContentsMargins(0, 0, 0, 0)
         row3_layout.setSpacing(8)
 
-        self.auto_collect_train_button = QPushButton("🔄 从0开始收集数据并训练")
+        self.auto_collect_train_button = QPushButton("🔄 一键收集并训练")
         self.auto_collect_train_button.clicked.connect(self.start_auto_collect_and_train)
         self.auto_collect_train_button.setStyleSheet(
             self.qt_button_style + """
@@ -1134,9 +1156,9 @@ class ArknightsApp(QMainWindow):
             )
             if reply == QMessageBox.StandardButton.Yes:
                 self.auto_collect_train.stop()
-                self.auto_collect_train_button.setText("🔄 从0开始收集数据并训练")
+                self.auto_collect_train_button.setText("🔄 一键收集并训练")
                 self.auto_collect_train_button.setEnabled(True)
-                self.auto_collect_status_label.setText("已停止")
+                self.auto_collect_status_label.setText("⏹️ 已手动停止")
             return
 
         # 获取训练时长和会话名
@@ -1158,13 +1180,14 @@ class ArknightsApp(QMainWindow):
 
         # 创建实例
         self.auto_collect_train = AutoCollectAndTrain(
-            adb_connector=self.adb_connector,
+            connector=self.active_connector,
             game_mode=self.game_mode,
             training_duration_hours=training_hours,
             progress_callback=self.update_auto_collect_status,
             completion_callback=self._emit_auto_collect_complete,
             session_name=session_name,
             device_type=device_type,
+            is_invest=self.is_invest,
         )
 
         # 启动流程
@@ -1173,17 +1196,25 @@ class ArknightsApp(QMainWindow):
     def stop_auto_collect_and_train(self):
         """停止自动数据收集流程"""
         if hasattr(self, 'auto_collect_train') and self.auto_collect_train.is_running:
-            reply = QMessageBox.question(
-                self,
-                "确认停止",
-                "确定要停止当前的自动数据收集流程吗？\n\n已收集的数据会被保留，但训练不会自动开始。",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                self.auto_collect_train.stop()
+            msg = QMessageBox(self)
+            msg.setWindowTitle("确认停止")
+            msg.setText("自动数据收集仍在运行中，请选择操作：")
+            btn_stop_train = msg.addButton("停止并训练", QMessageBox.ButtonRole.AcceptRole)
+            btn_stop_only = msg.addButton("仅停止", QMessageBox.ButtonRole.DestructiveRole)
+            btn_cancel = msg.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+            msg.exec()
+
+            if msg.clickedButton() == btn_stop_only:
+                self.auto_collect_train.stop(start_training=False)
+                self.auto_collect_train_button.setEnabled(True)
+                self.auto_collect_train_button.setText("🔄 一键收集并训练")
                 self.stop_auto_collect_button.setEnabled(False)
-                self.auto_collect_train_button.setText("🔄 从0开始收集数据并训练")
                 self.auto_collect_status_label.setText("⏹️ 已手动停止")
+            elif msg.clickedButton() == btn_stop_train:
+                self.auto_collect_train.stop(start_training=True)
+                self.auto_collect_train_button.setEnabled(False)
+                self.auto_collect_train_button.setText("⏳ 训练中...")
+                self.auto_collect_status_label.setText("正在准备训练...")
         else:
             QMessageBox.information(self, "提示", "当前没有运行中的自动收集流程")
     
@@ -1207,7 +1238,7 @@ class ArknightsApp(QMainWindow):
         """自动收集流程完成回调"""
         # 恢复按钮状态
         self.auto_collect_train_button.setEnabled(True)
-        self.auto_collect_train_button.setText("🔄 从0开始收集数据并训练")
+        self.auto_collect_train_button.setText("🔄 一键收集并训练")
         self.stop_auto_collect_button.setEnabled(False)
         
         if success:
