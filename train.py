@@ -465,19 +465,38 @@ def stratified_random_split(dataset, test_size=0.1, seed=42):
     labels = labels.numpy()  # 转换为 numpy array
 
     indices = np.arange(len(labels))
-    train_indices, val_indices = train_test_split(
-        indices, test_size=test_size, random_state=seed, stratify=labels
-    )
+    try:
+        train_indices, val_indices = train_test_split(
+            indices, test_size=test_size, random_state=seed, stratify=labels
+        )
+    except ValueError:
+        # 数据量太少无法分层分割，回退到普通随机分割
+        print(f"警告: 数据量({len(labels)}条)不足以分层分割，使用普通随机分割")
+        train_indices, val_indices = train_test_split(
+            indices, test_size=test_size, random_state=seed
+        )
     return (
         torch.utils.data.Subset(dataset, train_indices),
         torch.utils.data.Subset(dataset, val_indices),
     )
 
 
-def main():
-    # 配置参数
+def main(data_file="arknights.csv", save_dir="models", session_name="", pretrained_path="", device_type=""):
+    global device
+    if device_type:
+        try:
+            device = torch.device(device_type)
+            print(f"用户指定设备: {device_type} → {device}")
+        except Exception as e:
+            print(f"设备指定无效 ({e})，使用自动检测")
+    if device_type == "cuda" and not torch.cuda.is_available():
+        print("警告: CUDA 不可用，回退到 CPU")
+        device = torch.device("cpu")
+
+    session_prefix = f"{session_name}_" if session_name else ""
+
     config = {
-        "data_file": "arknights.csv",
+        "data_file": data_file,
         "batch_size": 1024,  # 512
         "test_size": 0.1,
         "embed_dim": 128,  # 512
@@ -486,11 +505,13 @@ def main():
         "lr": 3e-4,  # 3e-4
         "epochs": 200,  # 推荐500+
         "seed": 42,  # 随机数种子
-        "save_dir": "models",  # 存到哪里
+        "save_dir": save_dir,  # 存到哪里
         "max_feature_value": 100,  # 限制特征最大值，防止极端值造成不稳定
         "num_workers": 0
         if torch.cuda.is_available()
         else 0,  # 根据CUDA可用性设置num_workers
+        "session_prefix": session_prefix,
+        "pretrained_path": pretrained_path,
     }
 
     # 创建保存目录
@@ -568,6 +589,20 @@ def main():
         num_layers=config["n_layers"],
     ).to(device)
 
+    # 如果提供了预训练模型路径，加载权重继续训练
+    if pretrained_path and Path(pretrained_path).exists():
+        print(f"从预训练模型加载权重: {pretrained_path}")
+        try:
+            pretrained = torch.load(pretrained_path, map_location=device, weights_only=False)
+            if isinstance(pretrained, UnitAwareTransformer):
+                model = pretrained.to(device)
+                print("预训练模型加载成功（完整模型）")
+            else:
+                model.load_state_dict(pretrained, strict=False)
+                print("预训练权重加载成功")
+        except Exception as e:
+            print(f"预训练模型加载失败 ({e})，使用随机初始化")
+
     print(f"模型使用特征数: 怪物({MONSTER_COUNT}) + 场地({FIELD_FEATURE_COUNT}) = {total_units}")
 
     print(
@@ -615,7 +650,7 @@ def main():
             best_acc = val_acc
             torch.save(
                 model,
-                Path(config["save_dir"]) / "best_model_acc.pth",
+                Path(config["save_dir"]) / f"{session_prefix}best_model_acc.pth",
             )
 
             print("保存了新的最佳准确率模型!")
@@ -627,14 +662,14 @@ def main():
             best_loss = val_loss
             torch.save(
                 model,
-                Path(config["save_dir"]) / "best_model_loss.pth",
+                Path(config["save_dir"]) / f"{session_prefix}best_model_loss.pth",
             )
             print("保存了新的最佳损失模型!")
         else:
             print(f"最佳损失为: {best_loss:.4f}")
 
         torch.save(
-            model, Path(config["save_dir"]) / "best_model_full.pth"
+            model, Path(config["save_dir"]) / f"{session_prefix}best_model_full.pth"
         )  # 最后一次计算的模型
 
         # 保存最新模型
@@ -689,23 +724,18 @@ def main():
 
     save_dir_path = Path(config["save_dir"])
 
-    old_acc_path = save_dir_path / "best_model_acc.pth"
-    new_acc_path = save_dir_path / f"best_model_acc_{base_filename}"
-    if old_acc_path.exists():
-        old_acc_path.rename(new_acc_path)
-        print(f"模型文件已重命名: {old_acc_path} -> {new_acc_path}")
+    rename_mapping = [
+        (f"{session_prefix}best_model_acc.pth", f"{session_prefix}best_model_acc_{base_filename}"),
+        (f"{session_prefix}best_model_loss.pth", f"{session_prefix}best_model_loss_{base_filename}"),
+        (f"{session_prefix}best_model_full.pth", f"{session_prefix}best_model_full_{base_filename}"),
+    ]
 
-    old_loss_path = save_dir_path / "best_model_loss.pth"
-    new_loss_path = save_dir_path / f"best_model_loss_{base_filename}"
-    if old_loss_path.exists():
-        old_loss_path.rename(new_loss_path)
-        print(f"模型文件已重命名: {old_loss_path} -> {new_loss_path}")
-
-    old_full_path = save_dir_path / "best_model_full.pth"
-    new_full_path = save_dir_path / f"best_model_full_{base_filename}"
-    if old_full_path.exists():
-        old_full_path.rename(new_full_path)
-        print(f"模型文件已重命名: {old_full_path} -> {new_full_path}")
+    for old_name, new_name in rename_mapping:
+        old_path = save_dir_path / old_name
+        new_path = save_dir_path / new_name
+        if old_path.exists():
+            old_path.rename(new_path)
+            print(f"模型文件已重命名: {old_path} -> {new_path}")
 
     # 保存最终训练历史
     # plot_training_history(
@@ -715,4 +745,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--session", type=str, default="", help="会话名称")
+    ap.add_argument("--pretrained", type=str, default="", help="预训练模型路径（用于微调）")
+    ap.add_argument("--device", type=str, default="", help="训练设备: cpu 或 cuda")
+    args = ap.parse_args()
+    main(session_name=args.session, pretrained_path=args.pretrained, device_type=args.device)

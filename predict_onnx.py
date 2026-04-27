@@ -2,14 +2,28 @@ import onnxruntime as ort
 import os
 import numpy as np
 import logging
+from pathlib import Path
 
 from config import MONSTER_COUNT
 from config import FIELD_FEATURE_COUNT
 
 logger = logging.getLogger(__name__)
 
+
+def resolve_model_path(session_name=""):
+    """根据会话名称解析 ONNX 模型路径，找不到时回退默认"""
+    if session_name:
+        session_path = Path(f"models/{session_name}_best_model_full.onnx")
+        if session_path.exists():
+            return str(session_path)
+    default_path = Path("models/best_model_full.onnx")
+    if default_path.exists():
+        return str(default_path)
+    return "models/best_model_full.onnx"
+
+
 class CannotModel:
-    def __init__(self,model_path = "models/best_model_full.onnx"):
+    def __init__(self, model_path="models/best_model_full.onnx"):
         self.session = None  # ONNX Runtime 会话
         self.model_path = model_path
         self.is_model_loaded = False

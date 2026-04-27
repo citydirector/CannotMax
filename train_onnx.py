@@ -1,15 +1,14 @@
 """
 训练 ONNX 模型（一键流程）：
-1. 聚合 data/*/arknights.csv → 根目录 arknights.csv
+1. 读取 data/<session>/arknights.csv → 根目录 arknights.csv
 2. 运行 train.py 训练 PyTorch 模型
-3. 转换最佳模型 → models/best_model_full.onnx
+3. 转换最佳模型 → models/<session>_best_model_full.onnx
 4. 兼容 predict_onnx.py
 
-用法: uv run python train_onnx.py
+用法: uv run python train_onnx.py --session greenvine
 """
 import sys
 import os
-import shutil
 import logging
 from pathlib import Path
 
@@ -22,16 +21,20 @@ MODELS_DIR = BASE_DIR / "models"
 AGGREGATED_CSV = BASE_DIR / "arknights.csv"
 
 
-def aggregate_data():
-    """聚合所有 data/*/arknights.csv 到根目录"""
+def aggregate_data(session_name=""):
+    """聚合 session 对应的 CSV 到根目录"""
     if not DATA_DIR.exists():
         logger.error("data/ 目录不存在，请先收集数据")
         return False
 
-    csv_files = list(DATA_DIR.rglob("arknights.csv"))
-    if not csv_files:
-        logger.error("data/ 下没有找到 CSV 数据文件")
-        return False
+    if session_name:
+        target_path = DATA_DIR / session_name / "arknights.csv"
+        if not target_path.exists():
+            logger.error(f"数据文件不存在: {target_path}")
+            return False
+        csv_files = [target_path]
+    else:
+        csv_files = list(DATA_DIR.rglob("arknights.csv"))
 
     import pandas as pd
     dfs = []
@@ -54,38 +57,51 @@ def aggregate_data():
     return True
 
 
-def run_training():
+def find_best_pretrained(session_name):
+    """查找同 session 的已有模型用于微调"""
+    pth_files = list(MODELS_DIR.glob(f"{session_name}_best_model_full_*.pth"))
+    if not pth_files:
+        return ""
+    latest = max(pth_files, key=os.path.getmtime)
+    logger.info(f"找到同会话已有模型（将用于微调）: {latest}")
+    return str(latest)
+
+
+def run_training(session_name="", pretrained_path="", device_type=""):
     """运行 train.py 训练"""
     logger.info("=" * 50)
     logger.info("开始训练 PyTorch 模型...")
+    if device_type:
+        logger.info(f"设备: {device_type}")
+    if pretrained_path:
+        logger.info(f"微调模式: 从 {pretrained_path} 继续训练")
     logger.info("=" * 50)
 
-    # 确保 torch 可用
     try:
         import torch
     except ImportError:
         logger.error("需要 PyTorch。请运行: uv sync --extra cpu")
         return False
 
-    # train.py 会读取根目录的 arknights.csv
     sys.path.insert(0, str(BASE_DIR))
     from train import main as train_main
-    train_main()
+    train_main(session_name=session_name, pretrained_path=pretrained_path, device_type=device_type)
     return True
 
 
-def find_latest_pth():
+def find_latest_pth(session_name=""):
     """找到最近训练出的 .pth 模型"""
-    pth_files = list(MODELS_DIR.glob("best_model_full*.pth"))
+    prefix = f"{session_name}_" if session_name else ""
+    pth_files = list(MODELS_DIR.glob(f"{prefix}best_model_full_*.pth"))
     if not pth_files:
-        logger.error(f"{MODELS_DIR}/ 下未找到 best_model_full*.pth 文件")
+        logger.error(f"{MODELS_DIR}/ 下未找到 {prefix}best_model_full_*.pth 文件")
         return None
     latest = max(pth_files, key=os.path.getmtime)
     logger.info(f"找到最新模型: {latest}")
     return str(latest)
 
 
-def convert_to_onnx(pth_path):
+def convert_to_onnx(pth_path, session_name=""):
     """转换 .pth → .onnx (2输入兼容版)"""
     logger.info(f"正在将 {pth_path} 转换为 ONNX...")
     from predict import CannotModel
@@ -93,7 +109,16 @@ def convert_to_onnx(pth_path):
     model = CannotModel(pth_path)
     model.load_model()
 
-    output_onnx = str(MODELS_DIR / "best_model_full.onnx")
+    prefix = f"{session_name}_" if session_name else ""
+    onnx_name = f"{prefix}best_model_full.onnx"
+    output_onnx = str(MODELS_DIR / onnx_name)
+
+    # 删除旧文件，避免 .onnx.data 残留导致导出失败
+    for p in [Path(output_onnx), Path(output_onnx + ".data")]:
+        if p.exists():
+            p.unlink()
+            logger.info(f"已删除旧文件: {p}")
+
     model.export_onnx_v2(output_onnx)
 
     logger.info(f"✅ ONNX 模型已生成: {output_onnx}")
@@ -107,20 +132,52 @@ def cleanup():
         logger.info(f"已清理临时文件: {AGGREGATED_CSV}")
 
 
-def main():
+def cleanup_models(session_name=""):
+    """训练后清理 models 目录，只保留 live ONNX + 最新一组存档 pth"""
+    prefix = f"{session_name}_" if session_name else ""
+
+    # 1. 删除临时的 .pth 文件（归档前的文件名，非存档）
+    for name in ["best_model_acc.pth", "best_model_loss.pth", "best_model_full.pth"]:
+        p = MODELS_DIR / f"{prefix}{name}"
+        if p.exists():
+            p.unlink()
+            logger.info(f"已删除临时模型: {p}")
+
+    # 2. 清理旧存档 pth，只保留每组最新的 1 个
+    for suffix in ("acc", "loss", "full"):
+        archived = sorted(
+            MODELS_DIR.glob(f"{prefix}best_model_{suffix}_*.pth"),
+            key=os.path.getmtime, reverse=True,
+        )
+        for f in archived[1:]:  # 保留最新，删除更早的
+            f.unlink()
+            logger.info(f"已清理旧存档: {f.name}")
+
+    # 3. 清理无会话前缀的旧 onnx 文件（不再使用）
+    for p in [MODELS_DIR / "best_model_full.onnx", MODELS_DIR / "best_model_full.onnx.data"]:
+        if p.exists():
+            p.unlink()
+            logger.info(f"已清理旧默认模型: {p}")
+
+    logger.info("✅ 模型目录清理完成")
+
+
+def main(session_name="", pretrained_path="", device_type=""):
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
-    if not aggregate_data():
+    if not aggregate_data(session_name):
         sys.exit(1)
 
-    if not run_training():
+    if not run_training(session_name, pretrained_path, device_type):
         sys.exit(1)
 
-    latest_pth = find_latest_pth()
+    latest_pth = find_latest_pth(session_name)
     if not latest_pth:
         sys.exit(1)
 
-    onnx_path = convert_to_onnx(latest_pth)
+    onnx_path = convert_to_onnx(latest_pth, session_name)
+
+    cleanup_models(session_name)
 
     cleanup()
 
@@ -147,4 +204,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--session", type=str, default="", help="会话名称")
+    ap.add_argument("--pretrained", type=str, default="", help="预训练模型路径（可选，自动查同名会话）")
+    ap.add_argument("--device", type=str, default="", help="训练设备: cpu 或 cuda")
+    args = ap.parse_args()
+
+    pretrained_path = args.pretrained
+    if args.session and not pretrained_path:
+        pretrained_path = find_best_pretrained(args.session)
+
+    main(session_name=args.session, pretrained_path=pretrained_path, device_type=args.device)

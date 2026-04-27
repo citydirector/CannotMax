@@ -48,10 +48,12 @@ class AutoFetch:
         start_callback: Callable[[], None],
         stop_callback: Callable[[], None],
         training_duration,
+        session_name: str = "",
     ):
         self.adb_connector = adb_connector
         self.game_mode = game_mode  # 游戏模式（30人或自娱自乐）
         self.is_invest = is_invest  # 是否投资
+        self.session_name = session_name
         self.current_prediction = 0.5  # 当前预测结果，初始值为0.5
         self.recognize_results = []  # 识别结果列表
         self.field_recognize_result = {}  # 场地识别结果
@@ -95,6 +97,46 @@ class AutoFetch:
                 self.processed_template.append(img_quarter)
             else:
                 self.processed_template.append(None)
+
+    def _build_csv_header(self):
+        """构建 CSV 表头"""
+        if self.field_recognizer is not None:
+            num_field_features = len(self.field_recognizer.get_feature_columns())
+            header = [f"{i+1}L" for i in range(MONSTER_COUNT)]
+            header += [f"{i+1}LF" for i in range(MONSTER_COUNT, MONSTER_COUNT + num_field_features)]
+            header += [f"{i+1}R" for i in range(MONSTER_COUNT)]
+            header += [f"{i+1}RF" for i in range(MONSTER_COUNT, MONSTER_COUNT + num_field_features)]
+            header += ["Result", "ImgPath"]
+        else:
+            header = [f"{i+1}L" for i in range(MONSTER_COUNT)]
+            header += [f"{i+1}R" for i in range(MONSTER_COUNT)]
+            header += ["Result", "ImgPath"]
+        return header
+
+    def _is_csv_valid(self, csv_path: Path) -> bool:
+        """检查 CSV 文件是否有效"""
+        try:
+            import pandas as pd
+            expected = self._build_csv_header()
+            with open(csv_path, "r", encoding="utf-8") as f:
+                first_line = next(f, "").strip()
+            actual_cols = first_line.split(",") if first_line else []
+            if actual_cols != expected:
+                logger.warning(f"数据文件表头不匹配 (期望{len(expected)}列, 实际{len(actual_cols)}列)")
+                return False
+            df = pd.read_csv(csv_path)
+            if len(df.columns) != len(expected):
+                logger.warning(f"数据文件列数不匹配 (期望{len(expected)}, 实际{len(df.columns)})")
+                return False
+            expected_result = df["Result"].isin(["L", "R", "Left", "Right"]).all()
+            if not expected_result:
+                logger.warning("数据文件 Result 列包含无效值")
+                return False
+            logger.info(f"数据文件校验通过: {len(df)} 条有效数据")
+            return True
+        except Exception as e:
+            logger.warning(f"数据文件校验失败: {e}")
+            return False
 
     def match_images(self, screenshot):
         h, w = screenshot.shape[:2]
@@ -545,32 +587,36 @@ class AutoFetch:
                 pass
 
     def auto_fetch_loop(self):
-        should_graceful_exit = False  # 标记是否需要优雅退出
-        
+        should_graceful_exit = False
+        timer_expired_time = 0
+
         while self.auto_fetch_running:
             try:
                 self.auto_fetch_data()
                 elapsed_time = time.time() - self.start_time
-                
+
                 # 检查是否到达设定时长
-                if self.training_duration != -1 and elapsed_time >= self.training_duration:
-                    if not should_graceful_exit:
-                        logger.info("⏱️ 已达到设定时长，将在当前对局结束后停止")
-                        should_graceful_exit = True
-                    # 继续运行直到回到主界面或MODE_SELECTION状态
-                    # 这样确保完成当前对局
-                elif should_graceful_exit:
-                    # 如果已经标记要退出，检查是否回到了可以安全退出的状态
-                    # 这里简化处理：直接退出
-                    logger.info("✓ 当前对局已结束，准备停止自动获取")
-                    break
-                    
+                if self.training_duration != -1 and elapsed_time >= self.training_duration and not should_graceful_exit:
+                    logger.info("⏱️ 已达到设定时长，将在当前对局结束后停止")
+                    should_graceful_exit = True
+                    timer_expired_time = time.time()
+
+                # 优雅退出：等待当前对局完成（回到主界面）
+                if should_graceful_exit:
+                    if self.last_state == GameState.MAIN_MENU:
+                        logger.info("✓ 当前对局已结束（回到主界面），准备停止自动获取")
+                        break
+                    # 安全兜底：超时10分钟强制退出
+                    if time.time() - timer_expired_time > 600:
+                        logger.info("⚠️ 等待对局结束超时（10分钟），强制停止")
+                        break
+
                 # 检测一次间隔时间
                 time.sleep(0.1)
             except Exception as e:
                 logger.exception(f"自动获取数据出错:\n{e}")
                 break
-        
+
         # 不通过按钮结束自动获取
         logger.info("break auto_fetch_loop")
         self.stop_auto_fetch()
@@ -582,32 +628,27 @@ class AutoFetch:
             start_time = datetime.datetime.fromtimestamp(self.start_time).strftime(
                 r"%Y_%m_%d__%H_%M_%S"
             )
-            self.data_folder = Path(f"data/{start_time}")
+            if self.session_name:
+                self.data_folder = Path(f"data/{self.session_name}")
+            else:
+                self.data_folder = Path(f"data/{start_time}")
             logger.info(f"创建文件夹: {self.data_folder}")
             self.data_folder.mkdir(parents=True, exist_ok=True)  # 创建文件夹
             (self.data_folder / "images").mkdir(parents=True, exist_ok=True)
-            with open(self.data_folder / "arknights.csv", "w", newline="") as file:
-                # 创建CSV表头
-                if self.field_recognizer is not None:
-                    # 获取场地特征列数
-                    num_field_features = len(self.field_recognizer.get_feature_columns())
-                    
-                    # 按照data_cleaning_with_field_recognize_gpu.py的格式创建表头
-                    header = [f"{i+1}L" for i in range(MONSTER_COUNT)]  # 1L-77L
-                    header += [f"{i+1}LF" for i in range(MONSTER_COUNT, MONSTER_COUNT + num_field_features)]  # 78LF-83LF (场地特征)
-                    header += [f"{i+1}R" for i in range(MONSTER_COUNT)]  # 1R-77R 
-                    header += [f"{i+1}RF" for i in range(MONSTER_COUNT, MONSTER_COUNT + num_field_features)]  # 78RF-83RF (场地特征)
-                    header += ["Result", "ImgPath"]
-                    logger.info(f"创建包含场地特征的CSV表头，场地特征数: {num_field_features}")
-                else:
-                    # 仅怪物数据的格式
-                    header = [f"{i+1}L" for i in range(MONSTER_COUNT)]  # 左侧怪物数据
-                    header += [f"{i+1}R" for i in range(MONSTER_COUNT)]  # 右侧怪物数据
-                    header += ["Result", "ImgPath"]
-                    logger.info("创建仅包含怪物数据的CSV表头")
-                
-                writer = csv.writer(file)
-                writer.writerow(header)
+
+            csv_path = self.data_folder / "arknights.csv"
+            if csv_path.exists() and not self._is_csv_valid(csv_path):
+                logger.warning(f"数据文件损坏，将删除重建: {csv_path}")
+                csv_path.unlink()
+
+            is_new_file = not csv_path.exists()
+            if is_new_file:
+                with open(csv_path, "w", newline="") as file:
+                    writer = csv.writer(file)
+                    writer.writerow(self._build_csv_header())
+                    logger.info(f"创建新数据文件: {csv_path}")
+            else:
+                logger.info(f"数据文件已存在（将追加）: {csv_path}")
             self.log_file_handler = logging.FileHandler(
                 self.data_folder / f"AutoFetch_{start_time}.log", "a", "utf-8"
             )

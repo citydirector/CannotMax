@@ -126,6 +126,13 @@ class HistoryMatchUI(QFrame):
             )
             self.history_layout.addWidget(title_label)
 
+            if len(top_indices) == 0:
+                empty_label = QLabel("（暂无历史对局数据）")
+                empty_label.setStyleSheet("color: #888888; font: 14px Microsoft YaHei; padding: 20px;")
+                empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.history_layout.addWidget(empty_label)
+                return
+
             # 渲染每个历史对局
             for idx in top_indices:
                 self.add_history_match(idx, sims[idx], left_monsters, right_monsters)

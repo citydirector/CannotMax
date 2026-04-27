@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 
 import subprocess
 import sys
@@ -21,7 +22,6 @@ import similar_history_match
 import recognize
 from recognize import MONSTER_COUNT
 from specialmonster import SpecialMonsterHandler
-import data_package
 import winrt_capture
 from config import FIELD_FEATURE_COUNT, MONSTER_DATA
 from simular_history_match_ui import HistoryMatchUI
@@ -72,6 +72,9 @@ class ArknightsApp(QMainWindow):
     update_monster_signal = pyqtSignal(list)
     update_prediction_signal = pyqtSignal(float)
     update_statistics_signal = pyqtSignal()  # 用于更新统计信息
+    auto_collect_status_signal = pyqtSignal(str)   # 自动收集进度信号（安全跨线程）
+    auto_collect_complete_signal = pyqtSignal(bool, str)  # 自动收集完成信号
+    train_status_signal = pyqtSignal(str, bool)  # 训练进度信号（文本, 是否最终状态）
     qt_button_style = """
         QPushButton {
             background-color: #313131;
@@ -103,6 +106,7 @@ class ArknightsApp(QMainWindow):
         self.auto_fetch_running = False
         self.is_invest = False
         self.game_mode = "单人"
+        self._session_loading = False
 
         # 模型
         self.cannot_model = CannotModel()
@@ -293,14 +297,63 @@ class ArknightsApp(QMainWindow):
         control_group.setStyleSheet(dark_group_box_style)
         control_layout = QVBoxLayout(control_group)
 
-        # 第一行按钮
-        row1 = QWidget()
-        row1_layout = QHBoxLayout(row1)
-        row1_layout.setContentsMargins(0, 0, 0, 0)
+        # 第零行 - 配置参数
+        row0 = QWidget()
+        row0_layout = QHBoxLayout(row0)
+        row0_layout.setContentsMargins(0, 0, 0, 0)
 
         self.duration_label = QLabel("训练时长(小时):")
         self.duration_entry = QLineEdit("325")
         self.duration_entry.setFixedWidth(50)
+
+        self.session_name_label = QLabel("会话名:")
+        self.session_name_entry = QLineEdit("")
+        self.session_name_entry.setFixedWidth(110)
+        self.session_name_entry.setPlaceholderText("留空=按时间戳")
+        self.session_name_entry.setToolTip(
+            "同一会话名的数据和模型会累积复用。\n不同会话名完全隔离。\n留空则每次使用不同时间戳目录。"
+        )
+
+        # 训练设备选择
+        self.device_label = QLabel("训练设备:")
+        self.device_menu = QComboBox()
+        self.device_menu.addItem("自动检测", "")
+        self.device_menu.addItem("CPU", "cpu")
+        try:
+            import torch
+            if torch.cuda.is_available():
+                self.device_menu.addItem("CUDA", "cuda")
+        except ImportError:
+            pass
+        self.device_menu.setToolTip(
+            "选择训练设备。\n自动检测: 优先GPU。\nCPU: 仅使用CPU。\nCUDA: 强制使用NVIDIA GPU。"
+        )
+
+        # 加载缓存的配置（从上次运行恢复）
+        cached = self._load_session_config()
+        self._session_loading = True
+        if cached["session_name"]:
+            self.session_name_entry.setText(cached["session_name"])
+        if cached["device_type"]:
+            idx = self.device_menu.findData(cached["device_type"])
+            if idx >= 0:
+                self.device_menu.setCurrentIndex(idx)
+        self._session_loading = False
+        self.session_name_entry.textChanged.connect(self._on_session_name_changed)
+        self.device_menu.currentIndexChanged.connect(self._on_device_changed)
+
+        row0_layout.addWidget(self.duration_label)
+        row0_layout.addWidget(self.duration_entry)
+        row0_layout.addWidget(self.session_name_label)
+        row0_layout.addWidget(self.session_name_entry)
+        row0_layout.addWidget(self.device_label)
+        row0_layout.addWidget(self.device_menu)
+        row0_layout.addStretch()
+
+        # 第一行按钮 - 游戏操作
+        row1 = QWidget()
+        row1_layout = QHBoxLayout(row1)
+        row1_layout.setContentsMargins(0, 0, 0, 0)
 
         self.auto_fetch_button = QPushButton("自动获取数据")
         self.auto_fetch_button.clicked.connect(self.toggle_auto_fetch)
@@ -312,22 +365,16 @@ class ArknightsApp(QMainWindow):
         self.invest_checkbox = QCheckBox("投资")
         self.invest_checkbox.stateChanged.connect(self.update_invest_status)
 
-        row1_layout.addWidget(self.duration_label)
-        row1_layout.addWidget(self.duration_entry)
         row1_layout.addWidget(self.auto_fetch_button)
         row1_layout.addWidget(self.mode_menu)
         row1_layout.addWidget(self.invest_checkbox)
+        row1_layout.addStretch()
 
-        # 第二行按钮 - 数据操作和统计
+        # 第二行 - 统计信息
         row2 = QWidget()
         row2_layout = QHBoxLayout(row2)
         row2_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.package_data_button = QPushButton("数据打包")
-        self.package_data_button.clicked.connect(self.package_data_and_show)
-        row2_layout.addWidget(self.package_data_button)
-
-        # 统计信息显示
         self.stats_label = QLabel()
         self.stats_label.setFont(QFont("Microsoft YaHei", 10))
         row2_layout.addWidget(self.stats_label)
@@ -370,7 +417,7 @@ class ArknightsApp(QMainWindow):
             """
         )
         self.auto_collect_train_button.setToolTip(
-            "一键完成：忽略旧模型 → 自动游戏收集数据（固定选左）→ 到达时长后停止 → 自动训练新模型"
+            "一键完成：自动收集数据（追加到当前会话）→ 到达时长后停止 → 基于历史模型微调 → 导出新ONNX"
         )
         row4_layout.addWidget(self.auto_collect_train_button)
 
@@ -413,6 +460,7 @@ class ArknightsApp(QMainWindow):
         github_label.setContentsMargins(0, 0, 0, 0)
 
         # 添加到控制布局
+        control_layout.addWidget(row0)
         control_layout.addWidget(row1)
         control_layout.addWidget(row2)
         control_layout.addWidget(row3)
@@ -558,6 +606,10 @@ class ArknightsApp(QMainWindow):
         self.update_monster_signal.connect(self.update_monster)
         self.update_prediction_signal.connect(self.update_prediction)
         self.update_statistics_signal.connect(self.update_statistics)
+        # 连接自动收集信号（保证GUI操作在主线程执行）
+        self.auto_collect_status_signal.connect(self._on_auto_collect_status)
+        self.auto_collect_complete_signal.connect(self.on_auto_collect_complete)
+        self.train_status_signal.connect(self._on_train_status)
         self.refresh_device_list()
 
     def toggle_input_panel(self):
@@ -946,6 +998,7 @@ class ArknightsApp(QMainWindow):
                 start_callback=self.start_callback,
                 stop_callback=self.stop_callback,
                 training_duration=float(self.duration_entry.text()) * 3600,  # 获取训练时长
+                session_name=self.session_name_entry.text().strip(),
             )
             self.auto_fetch.start_auto_fetch()
         else:
@@ -963,25 +1016,58 @@ class ArknightsApp(QMainWindow):
             try:
                 self.train_onnx_button.setText("⏳ 训练中...")
                 self.train_onnx_button.setEnabled(False)
-                self.train_status_label.setText("训练中，请稍候...")
+                self.train_status_signal.emit("训练中，请稍候...", False)
 
                 # 使用 uv run 执行 train_onnx.py
+                env = os.environ.copy()
+                env["PYTHONIOENCODING"] = "utf-8"
+                cmd = ["uv", "run", "python", "train_onnx.py"]
+                session = self.session_name_entry.text().strip()
+                if session:
+                    cmd += ["--session", session]
+                device = self.device_menu.currentData() or ""
+                if device:
+                    cmd += ["--device", device]
                 proc = subprocess.Popen(
-                    ["uv", "run", "python", "train_onnx.py"],
+                    cmd,
                     cwd="D:\\CannotMax",
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
+                    env=env,
                 )
-                # 实时输出到日志
-                for line in proc.stdout:
-                    line = line.rstrip()
-                    if line:
-                        logger.info(line)
-                        # 用 Qt 信号更新最后一行状态
-                        self.train_status_label.setText(line[-80:])
 
+                # 非阻塞读取：同时检测子进程是否崩溃
+                import queue
+                q = queue.Queue()
+
+                def _reader(pipe, q):
+                    try:
+                        for line in iter(pipe.readline, b''):
+                            q.put(line)
+                    finally:
+                        pipe.close()
+
+                reader_thread = threading.Thread(target=_reader, args=(proc.stdout, q), daemon=True)
+                reader_thread.start()
+
+                while True:
+                    try:
+                        line = q.get(timeout=1.0)
+                    except queue.Empty:
+                        if proc.poll() is not None:
+                            # 子进程已退出且没有更多输出
+                            break
+                        continue
+
+                    try:
+                        decoded_line = line.decode('utf-8').rstrip()
+                    except UnicodeDecodeError:
+                        decoded_line = line.decode('gbk', errors='ignore').rstrip()
+                    if decoded_line:
+                        logger.info(decoded_line)
+                        self.train_status_signal.emit(decoded_line[-80:], False)
+
+                reader_thread.join(timeout=3)
                 proc.wait()
                 return_code = proc.returncode
 
@@ -990,7 +1076,9 @@ class ArknightsApp(QMainWindow):
                     from importlib import reload
                     import predict_onnx
                     reload(predict_onnx)
-                    self.cannot_model = predict_onnx.CannotModel()
+                    session = self.session_name_entry.text().strip()
+                    model_path = predict_onnx.resolve_model_path(session)
+                    self.cannot_model = predict_onnx.CannotModel(model_path)
                     model_name = Path(self.cannot_model.model_path).name if self.cannot_model.model_path else "未加载"
                     self.setWindowTitle(
                         self.windowTitle().rsplit(" - model:", 1)[0] + f" - model: {model_name}"
@@ -1000,15 +1088,15 @@ class ArknightsApp(QMainWindow):
                         self.recognize_button.setToolTip("")
                         self.input_panel.predict_button.setEnabled(True)
                         self.input_panel.predict_button.setToolTip("")
-                        self.train_status_label.setText("✅ 训练完成！ONNX 模型已加载")
+                        self.train_status_signal.emit("✅ 训练完成！ONNX 模型已加载", True)
                     else:
-                        self.train_status_label.setText("⚠️ 模型生成但加载失败，请检查")
+                        self.train_status_signal.emit("⚠️ 模型生成但加载失败，请检查", True)
                 else:
-                    self.train_status_label.setText(f"❌ 训练失败 (code={return_code})")
+                    self.train_status_signal.emit(f"❌ 训练失败 (code={return_code})", True)
 
             except Exception as e:
                 logger.error(f"训练出错: {e}")
-                self.train_status_label.setText(f"❌ 训练异常: {str(e)[:60]}")
+                self.train_status_signal.emit(f"❌ 训练异常: {str(e)[:60]}", True)
             finally:
                 self.train_onnx_button.setText("🧠 训练ONNX模型")
                 self.train_onnx_button.setEnabled(True)
@@ -1031,56 +1119,35 @@ class ArknightsApp(QMainWindow):
                 self.auto_collect_train_button.setEnabled(True)
                 self.auto_collect_status_label.setText("已停止")
             return
-        
-        # 检查是否有auto_fetch在运行
-        if hasattr(self, "auto_fetch") and self.auto_fetch.auto_fetch_running:
-            QMessageBox.warning(self, "冲突", "请先停止「自动获取数据」再进行此操作")
-            return
-        
-        # 获取训练时长
+
+        # 获取训练时长和会话名
         try:
             training_hours = float(self.duration_entry.text())
-            if training_hours <= 0:
-                raise ValueError("训练时长必须大于0")
-        except ValueError as e:
-            QMessageBox.warning(self, "输入错误", f"训练时长格式错误: {e}")
-            return
-        
-        # 确认对话框
-        reply = QMessageBox.question(
-            self,
-            "确认开始",
-            f"即将开始自动数据收集和训练流程：\n\n"
-            f"1. 忽略当前错误的ONNX模型\n"
-            f"2. 自动游戏收集数据（固定观望，不投资）\n"
-            f"   ⚠️ 注意：此模式会忽略上方的\"投资\"复选框\n"
-            f"3. 运行 {training_hours:.1f} 小时后停止\n"
-            f"4. 自动训练新模型\n\n"
-            f"是否继续？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        
-        # 禁用启动按钮，启用停止按钮
+        except ValueError:
+            training_hours = 1.0
+        session_name = self.session_name_entry.text().strip()
+        device_type = self.device_menu.currentData() or ""
+
+        # 设置运行状态
         self.auto_collect_train_button.setEnabled(False)
         self.auto_collect_train_button.setText("⏳ 收集中...")
         self.stop_auto_collect_button.setEnabled(True)
         self.auto_collect_status_label.setText("准备启动...")
-        
+
         # 导入自动收集模块
         from auto_collect_and_train import AutoCollectAndTrain
-        
+
         # 创建实例
         self.auto_collect_train = AutoCollectAndTrain(
             adb_connector=self.adb_connector,
             game_mode=self.game_mode,
             training_duration_hours=training_hours,
             progress_callback=self.update_auto_collect_status,
-            completion_callback=self.on_auto_collect_complete,
+            completion_callback=self._emit_auto_collect_complete,
+            session_name=session_name,
+            device_type=device_type,
         )
-        
+
         # 启动流程
         self.auto_collect_train.start()
     
@@ -1102,9 +1169,21 @@ class ArknightsApp(QMainWindow):
             QMessageBox.information(self, "提示", "当前没有运行中的自动收集流程")
     
     def update_auto_collect_status(self, message: str):
-        """更新自动收集状态显示"""
+        """自动收集状态回调（当前在工作线程中），通过信号安全传到主线程"""
+        self.auto_collect_status_signal.emit(message)
+
+    def _on_auto_collect_status(self, message: str):
+        """主线程：更新自动收集状态显示"""
         self.auto_collect_status_label.setText(message[-80:])  # 显示最后80个字符
+
+    def _on_train_status(self, message: str, is_final: bool):
+        """主线程：更新训练状态显示"""
+        self.train_status_label.setText(message[-80:])
     
+    def _emit_auto_collect_complete(self, success: bool, message: str):
+        """完成回调（工作线程），通过信号安全转到主线程"""
+        self.auto_collect_complete_signal.emit(success, message)
+
     def on_auto_collect_complete(self, success: bool, message: str):
         """自动收集流程完成回调"""
         # 恢复按钮状态
@@ -1121,7 +1200,9 @@ class ArknightsApp(QMainWindow):
                 from importlib import reload
                 import predict_onnx
                 reload(predict_onnx)
-                self.cannot_model = predict_onnx.CannotModel()
+                session = self.auto_collect_train.session_name if hasattr(self, 'auto_collect_train') else ""
+                model_path = predict_onnx.resolve_model_path(session)
+                self.cannot_model = predict_onnx.CannotModel(model_path)
                 
                 if self.cannot_model.is_model_loaded:
                     model_name = Path(self.cannot_model.model_path).name
@@ -1278,19 +1359,6 @@ class ArknightsApp(QMainWindow):
             )
         )
 
-    def package_data_and_show(self):
-        try:
-            zip_filename = data_package.package_data()
-            if zip_filename:
-                # 在文件浏览器中高亮显示文件
-                subprocess.run(f'explorer /select,"{zip_filename}"')
-                QMessageBox.information(self, "成功", f"数据已打包到 {zip_filename}")
-            else:
-                QMessageBox.warning(self, "警告", "没有找到可以打包的数据目录。")
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"打包数据时发生错误: {str(e)}")
-
-
     def toggle_always_on_top(self):
         if self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint:
             self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
@@ -1304,12 +1372,53 @@ class ArknightsApp(QMainWindow):
         """窗口关闭时的处理"""
         if hasattr(self, "auto_fetch") and self.auto_fetch.auto_fetch_running:
             self.auto_fetch.stop_auto_fetch()
-        
+
         if hasattr(self, "auto_collect_train") and self.auto_collect_train.is_running:
             logger.info("正在停止自动数据收集流程...")
             self.auto_collect_train.stop()
-        
+
+        self._save_session_config()
         event.accept()
+
+    CONFIG_PATH = Path(__file__).parent / "app_config.json"
+
+    def _load_session_config(self):
+        """加载缓存的配置（会话名和设备）"""
+        try:
+            if self.CONFIG_PATH.exists():
+                data = json.loads(self.CONFIG_PATH.read_text(encoding="utf-8"))
+                return {
+                    "session_name": data.get("session_name", "").strip(),
+                    "device_type": data.get("device_type", ""),
+                }
+        except Exception as e:
+            logger.debug(f"加载配置失败: {e}")
+        return {"session_name": "", "device_type": ""}
+
+    def _save_session_config(self):
+        """保存配置到文件"""
+        try:
+            session = self.session_name_entry.text().strip()
+            device_data = self.device_menu.currentData()
+            data = {
+                "session_name": session,
+                "device_type": device_data if device_data else "",
+            }
+            self.CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"保存配置失败: {e}")
+
+    def _on_session_name_changed(self):
+        """会话名变更时自动缓存"""
+        if self._session_loading:
+            return
+        self._save_session_config()
+
+    def _on_device_changed(self):
+        """训练设备变更时自动缓存"""
+        if self._session_loading:
+            return
+        self._save_session_config()
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 功能：一键完成数据收集 -> 模型训练 -> 模型加载的完整流程
 """
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -31,6 +32,8 @@ class AutoCollectAndTrain:
         training_duration_hours: float = 1.0,
         progress_callback: Optional[Callable[[str], None]] = None,
         completion_callback: Optional[Callable[[bool, str], None]] = None,
+        session_name: str = "",
+        device_type: str = "",
     ):
         """
         Args:
@@ -39,20 +42,25 @@ class AutoCollectAndTrain:
             training_duration_hours: 训练时长（小时）
             progress_callback: 进度回调函数，接收状态字符串
             completion_callback: 完成回调函数，接收(success: bool, message: str)
+            session_name: 会话名称，用于分组数据和模型
+            device_type: 训练设备（"cpu" 或 "cuda"，空=自动检测）
         """
         self.adb_connector = adb_connector
         self.game_mode = game_mode
         self.training_duration_seconds = int(training_duration_hours * 3600)
         self.progress_callback = progress_callback
         self.completion_callback = completion_callback
-        
+        self.session_name = session_name
+        self.device_type = device_type
+
         self.is_running = False
         self.auto_fetch_instance = None
         self._stop_event = threading.Event()
         
-    def _update_progress(self, message: str):
+    def _update_progress(self, message: str, log: bool = True):
         """更新进度信息"""
-        logger.info(message)
+        if log:
+            logger.info(message)
         if self.progress_callback:
             self.progress_callback(message)
     
@@ -89,16 +97,30 @@ class AutoCollectAndTrain:
             # 步骤1: 准备阶段
             self._update_progress("🚀 开始自动数据收集和训练流程")
             self._update_progress(f"⏱️ 预计时长: {self.training_duration_seconds / 3600:.1f} 小时")
+
+            # 清理上次中断遗留的临时模型文件
+            prefix = f"{self.session_name}_" if self.session_name else ""
+            for name in ["best_model_acc.pth", "best_model_loss.pth", "best_model_full.pth"]:
+                p = Path(f"models/{prefix}{name}")
+                if p.exists():
+                    p.unlink()
+                    self._update_progress(f"已清理临时文件: {p.name}")
             
             # 步骤2: 检查并备份旧模型（如果存在）
-            old_model_path = Path("models/best_model_full.onnx")
+            prefix = f"{self.session_name}_" if self.session_name else ""
+            old_model_path = Path(f"models/{prefix}best_model_full.onnx")
+            backup_path = old_model_path.with_suffix(".onnx.backup")
             if old_model_path.exists():
                 self._update_progress("📦 检测到旧模型，将在使用前禁用")
-                # 不删除，只是标记为不可用
-                backup_path = old_model_path.with_suffix(".onnx.backup")
                 if backup_path.exists():
                     backup_path.unlink()
                 old_model_path.rename(backup_path)
+                old_data_path = old_model_path.with_suffix(".onnx.data")
+                if old_data_path.exists():
+                    backup_data_path = backup_path.with_suffix(".backup.data")
+                    if backup_data_path.exists():
+                        backup_data_path.unlink()
+                    old_data_path.rename(backup_data_path)
                 self._update_progress("✓ 旧模型已备份")
             
             # 步骤3: 启动数据收集
@@ -139,6 +161,7 @@ class AutoCollectAndTrain:
                 start_callback=on_fetch_start,
                 stop_callback=on_fetch_stop,
                 training_duration=self.training_duration_seconds,
+                session_name=self.session_name,
             )
             
             # 检查模型状态并给出提示
@@ -164,7 +187,7 @@ class AutoCollectAndTrain:
                 if current_time - last_update_time >= 1.0:
                     last_update_time = current_time
                     
-                    # 显示剩余时间
+                    # 显示剩余时间（仅更新GUI，不写入控制台日志）
                     if self.auto_fetch_instance.start_time:
                         elapsed = current_time - self.auto_fetch_instance.start_time
                         remaining = self.training_duration_seconds - elapsed
@@ -177,9 +200,9 @@ class AutoCollectAndTrain:
                                 time_str = f"{hours}小时{mins_remaining}分{secs}秒"
                             else:
                                 time_str = f"{mins}分{secs}秒"
-                            self._update_progress(f"⏱️ 剩余时间: {time_str}")
+                            self._update_progress(f"⏱️ 剩余时间: {time_str}", log=False)
                         else:
-                            self._update_progress("⏱️ 时间到，正在停止...")
+                            self._update_progress("⏱️ 时间到，正在停止...", log=False)
             
             # 确保停止数据收集
             if self.auto_fetch_instance.auto_fetch_running:
@@ -209,10 +232,10 @@ class AutoCollectAndTrain:
             
             # 步骤6: 恢复旧模型备份（如果新训练失败则使用旧的）
             # 这里我们假设训练成功，删除备份
-            backup_path = old_model_path.with_suffix(".onnx.backup")
-            if backup_path.exists():
-                backup_path.unlink()
-                self._update_progress("🗑️ 已清理旧模型备份")
+            for p in [backup_path, backup_path.with_suffix(".backup.data")]:
+                if p.exists():
+                    p.unlink()
+            self._update_progress("🗑️ 已清理旧模型备份")
             
             # 步骤7: 完成
             self._update_progress("✅ 自动数据收集和训练流程完成！")
@@ -235,20 +258,27 @@ class AutoCollectAndTrain:
         """统计收集到的数据条数"""
         try:
             import pandas as pd
-            from pathlib import Path
-            
+
             data_dir = Path("data")
-            csv_files = list(data_dir.rglob("arknights.csv"))
-            
-            total_rows = 0
-            for csv_file in csv_files:
+            if self.session_name:
+                target = data_dir / self.session_name / "arknights.csv"
+                if not target.exists():
+                    return 0
                 try:
-                    df = pd.read_csv(csv_file)
-                    total_rows += len(df)
+                    df = pd.read_csv(target)
+                    return len(df)
                 except Exception:
-                    pass
-            
-            return total_rows
+                    return 0
+            else:
+                csv_files = list(data_dir.rglob("arknights.csv"))
+                total_rows = 0
+                for csv_file in csv_files:
+                    try:
+                        df = pd.read_csv(csv_file)
+                        total_rows += len(df)
+                    except Exception:
+                        pass
+                return total_rows
         except Exception as e:
             logger.error(f"统计数据失败: {e}")
             return 0
@@ -257,15 +287,21 @@ class AutoCollectAndTrain:
         """执行模型训练"""
         try:
             self._update_progress("🔄 启动训练进程...")
-            
+
             # 使用subprocess运行train_onnx.py
-            # 注意：不使用text模式，避免编码问题
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            cmd = ["uv", "run", "python", "train_onnx.py"]
+            if self.session_name:
+                cmd += ["--session", self.session_name]
+            if self.device_type:
+                cmd += ["--device", self.device_type]
             proc = subprocess.Popen(
-                ["uv", "run", "python", "train_onnx.py"],
+                cmd,
                 cwd=str(Path(__file__).parent),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                # 移除 encoding 参数，使用 bytes 模式
+                env=env,
             )
             
             # 实时输出训练日志（处理编码问题）

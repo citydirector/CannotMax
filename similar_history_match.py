@@ -76,9 +76,16 @@ class HistoryMatch:
 
     def render_similar_matches(self, left_counts: np.ndarray, right_counts: np.ndarray):
         """返回与当前对局最相似的历史对局索引及胜率统计"""
-        # 将输入转为浮点型数组
         cur_left = left_counts.astype(float)
         cur_right = right_counts.astype(float)
+        if self.N_history == 0:
+            self.sims = np.array([])
+            self.top20_idx = np.array([], dtype=int)
+            self.cur_left = cur_left
+            self.cur_right = cur_right
+            self.left_rate = 0.0
+            self.right_rate = 0.0
+            return self.top20_idx, self.left_rate, self.right_rate
 
         # 计算当前存在的兵种布尔向量
         pres_L = cur_left > 0
