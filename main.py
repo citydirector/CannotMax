@@ -1467,7 +1467,7 @@ class ArknightsApp(QMainWindow):
         self._save_session_config()
         event.accept()
 
-<<<<<<< HEAD
+
     CONFIG_PATH = Path(__file__).parent / "app_config.json"
 
     def _load_session_config(self):

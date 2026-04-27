@@ -745,7 +745,6 @@ def main(data_file="arknights.csv", save_dir="models", session_name="", pretrain
 
 
 if __name__ == "__main__":
-if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", type=str, default="", help="会话名称")

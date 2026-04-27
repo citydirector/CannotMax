@@ -194,6 +194,11 @@ class AutoCollectAndTrain:
                     self.completion_callback(False, "已手动停止，数据已保留")
                 return
 
+            # 用户可能在准备阶段再次按停止，每个步骤前检查
+            if self._stop_event.is_set() and not self._should_train_on_stop:
+                self._update_progress("⏹️ 已手动停止，跳过训练")
+                return
+
             # 步骤3: 备份旧模型
             old_model_path = Path(f"models/{prefix}best_model_full.onnx")
             backup_path = old_model_path.with_suffix(".onnx.backup")
@@ -210,6 +215,10 @@ class AutoCollectAndTrain:
                     old_data_path.rename(backup_data_path)
                 self._update_progress("✓ 旧模型已备份")
 
+            if self._stop_event.is_set() and not self._should_train_on_stop:
+                self._update_progress("⏹️ 已手动停止，跳过训练")
+                return
+
             # 步骤4: 统计收集到的数据
             self._update_progress("📊 统计收集到的数据...")
             data_count = self._count_collected_data()
@@ -218,6 +227,10 @@ class AutoCollectAndTrain:
             if data_count < 10:
                 self._update_progress(f"⚠️ 警告: 数据量较少 ({data_count}条)，训练效果可能不佳")
                 self._update_progress("   建议至少收集50条以上数据")
+
+            if self._stop_event.is_set() and not self._should_train_on_stop:
+                self._update_progress("⏹️ 已手动停止，跳过训练")
+                return
 
             # 步骤5: 开始训练模型
             self._update_progress("🧠 开始训练新模型...")

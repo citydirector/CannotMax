@@ -76,6 +76,7 @@ class AutoFetch:
         self.recognizer = RecognizeMonster(method="ADB")
         self.cannot_model = CannotModel()
         self.last_state = GameState.UNKNOWN
+        self._pre_battle_stuck = False  # PRE_BATTLE 点击无效标记
         self.login_manager = LoginManager(connector)
         self.unknown_start_time = None  # 新增：记录进入 UNKNOWN 状态的时间
 
@@ -229,8 +230,8 @@ class AutoFetch:
             field_feature_columns = self.field_recognizer.get_feature_columns()
             field_data_values = []
             for col in field_feature_columns:
-                if col in field_recoginze_result:
-                    field_data_values.append(field_recoginze_result[col])
+                if col in field_recognize_result:
+                    field_data_values.append(field_recognize_result[col])
                 else:
                     field_data_values.append(0)  # 默认值
 
@@ -275,7 +276,7 @@ class AutoFetch:
         # 构建左右侧怪物描述
         left_monsters_desc = []
         right_monsters_desc = []
-        for res in recoginze_results:
+        for res in recognize_results:
             if "error" not in res and res["matched_id"] != 0:
                 monster_name = f"ID{res['matched_id']}"
                 count = res["number"]
@@ -729,18 +730,24 @@ class AutoFetch:
                 screenshot = self.connector.capture_screenshot()
                 self.recognize_and_predict(screenshot)
 
+                # 检测卡住：上次点完还在 PRE_BATTLE → 标记，下次改用 ALL
+                if self.last_state == GameState.PRE_BATTLE:
+                    self._pre_battle_stuck = True
+                else:
+                    self._pre_battle_stuck = False
+
                 # 点击下一轮
                 if self.is_invest:  # 投资
                     # 根据预测结果点击投资左/右
                     if self.current_prediction > 0.5:
-                        if best_idx == 4:
+                        if best_idx == 4 or self._pre_battle_stuck:
                             self.connector.click(relative_points[0])  # 右ALL
                         else:
                             self.connector.click(relative_points[2])  # 右礼物
                         logger.info("投资右")
                         time.sleep(3)
                     else:
-                        if best_idx == 4:
+                        if best_idx == 4 or self._pre_battle_stuck:
                             self.connector.click(relative_points[1])  # 左ALL
                         else:
                             self.connector.click(relative_points[3])  # 左礼物
