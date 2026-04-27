@@ -57,7 +57,7 @@ class CannotModel:
             latest_time = None
 
             pattern = re.compile(
-                r"best_model_(acc|loss|full)_data\d+_acc\d+\.\d+_loss\d+\.\d+_(\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2})\.pth$"
+                r"(?:\w+_)?best_model_(acc|loss|full)_data\d+_acc\d+\.\d+_loss\d+\.\d+_(\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2})\.pth$"
             )
 
             for model_file_path in models:
@@ -81,6 +81,7 @@ class CannotModel:
                 logger.error(
                     f"No models with the expected name format found in {path}"
                 )
+                return ""
 
         elif Path(path).is_file():
             logger.info(f"Using specified model file: {path}")

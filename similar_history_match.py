@@ -1,14 +1,29 @@
 import numpy as np
 import pandas as pd
+from pathlib import Path
 from sklearn.metrics.pairwise import cosine_similarity
 from config import MONSTER_COUNT
 from config import FIELD_FEATURE_COUNT
 
+
+def find_history_csv(session_name=""):
+    """根据会话名查找历史数据 CSV"""
+    if session_name:
+        session_path = Path(f"data/{session_name}/arknights.csv")
+        if session_path.exists():
+            return str(session_path)
+    root_path = Path("arknights.csv")
+    if root_path.exists():
+        return str(root_path)
+    return "arknights.csv"
+
+
 class HistoryMatch:
     """错题本数据集的读取和处理类"""
 
-    def __init__(self, csv_path="arknights.csv"):
-        # 初始化时加载历史对局数据
+    def __init__(self, csv_path=None, session_name=""):
+        if csv_path is None:
+            csv_path = find_history_csv(session_name)
         self.csv_path = csv_path
         self.load_history_data()
 

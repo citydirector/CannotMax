@@ -117,7 +117,8 @@ class ArknightsApp(QMainWindow):
         # 初始化UI后加载历史数据
         logger.info("尝试获取错题本")
         self.history_match = None
-        self.history_match = similar_history_match.HistoryMatch()
+        session_for_history = self._load_session_config().get("session_name", "")
+        self.history_match = similar_history_match.HistoryMatch(session_name=session_for_history)
         # Ensure feat_past and N_history are initialized
         try:
             self.history_match.feat_past = np.hstack([self.history_match.past_left, self.history_match.past_right])
