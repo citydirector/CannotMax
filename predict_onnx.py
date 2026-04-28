@@ -109,17 +109,17 @@ class CannotModel:
             )
         
         def validate_input(arr, should_pad=False):
-            """验证并转换输入数据"""
-            # 转换为 int64 类型
+            """验证并转换输入数据，必要时裁剪或填充以匹配模型期望维度"""
             arr = arr.astype(np.int64)
-            
-            # 如果需要，填充到模型期望的维度
-            if should_pad and len(arr) < model_expected_dim:
-                padded = np.zeros(model_expected_dim, dtype=np.int64)
-                padded[:len(arr)] = arr
-                arr = padded
-            
-            # 添加批次维度（如果输入是单样本）
+
+            if should_pad:
+                if len(arr) > model_expected_dim:
+                    arr = arr[:model_expected_dim]
+                elif len(arr) < model_expected_dim:
+                    padded = np.zeros(model_expected_dim, dtype=np.int64)
+                    padded[:len(arr)] = arr
+                    arr = padded
+
             if arr.ndim == 1:
                 arr = arr[np.newaxis, :]
             return arr

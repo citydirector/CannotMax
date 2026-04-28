@@ -1092,7 +1092,7 @@ class ArknightsApp(QMainWindow):
                     cmd += ["--device", device]
                 proc = subprocess.Popen(
                     cmd,
-                    cwd="D:\\CannotMax",
+                    cwd=Path(__file__).parent,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     env=env,
