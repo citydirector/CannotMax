@@ -150,54 +150,14 @@ class CannotModel:
         return float(prediction)
     
     def get_prediction_with_terrain(self, full_features: np.ndarray):
-        """使用包含地形特征的完整特征向量进行预测（ONNX版本）"""
+        """使用包含地形特征的完整特征向量进行预测（ONNX版本）
+        我们的模型是 2-input 格式（left_counts, right_counts），由 wrapper 内部处理 sign/abs
+        """
         if self.session is None:
             raise RuntimeError("模型未正确初始化")
-
-        # 检查特征向量长度
-        expected_length = MONSTER_COUNT * 2 + FIELD_FEATURE_COUNT * 2  # 77L + 6L + 77R + 6R = 166
-        if len(full_features) != expected_length:
-            logger.warning(f"特征向量长度不匹配: 期望{expected_length}, 实际{len(full_features)}")
-            # 如果长度不匹配，回退到原始方法
-            left_counts = full_features[:MONSTER_COUNT]
-            right_counts = full_features[MONSTER_COUNT:MONSTER_COUNT*2]
-            return self.get_prediction(left_counts, right_counts)
-
-        # 提取各个部分
-        left_monsters = full_features[:MONSTER_COUNT]  # 1L-77L
-        left_terrain = full_features[MONSTER_COUNT:MONSTER_COUNT+FIELD_FEATURE_COUNT]  # 78L-83L
-        right_monsters = full_features[MONSTER_COUNT+FIELD_FEATURE_COUNT:MONSTER_COUNT*2+FIELD_FEATURE_COUNT]  # 1R-77R
-        right_terrain = full_features[MONSTER_COUNT*2+FIELD_FEATURE_COUNT:MONSTER_COUNT*2+FIELD_FEATURE_COUNT*2]  # 78R-83R
-
-        # 处理左侧特征
-        left_monster_signs = np.sign(left_monsters).astype(np.int64)
-        left_terrain_signs = np.ones_like(left_terrain).astype(np.int64)
-        left_signs = np.concatenate([left_monster_signs, left_terrain_signs])
-
-        left_monster_counts = np.abs(left_monsters).astype(np.int64)
-        left_counts = np.concatenate([left_monster_counts, left_terrain.astype(np.int64)])
-
-        # 处理右侧特征
-        right_monster_signs = np.sign(right_monsters).astype(np.int64)
-        right_terrain_signs = np.ones_like(right_terrain).astype(np.int64)
-        right_signs = np.concatenate([right_monster_signs, right_terrain_signs])
-
-        right_monster_counts = np.abs(right_monsters).astype(np.int64)
-        right_counts = np.concatenate([right_monster_counts, right_terrain.astype(np.int64)])
-
-        def validate_input(arr):
-            """验证并转换输入数据"""
-            arr = arr.astype(np.int64)
-            if arr.ndim == 1:
-                arr = arr[np.newaxis, :]
-            return arr
-
-        inputs = {
-            "left_signs": validate_input(left_signs),
-            "left_counts": validate_input(left_counts),
-            "right_signs": validate_input(right_signs),
-            "right_counts": validate_input(right_counts)
-        }
+        left_counts = full_features[:MONSTER_COUNT]
+        right_counts = full_features[MONSTER_COUNT:MONSTER_COUNT * 2]
+        return self.get_prediction(left_counts, right_counts)
 
         # 执行推理
         try:
